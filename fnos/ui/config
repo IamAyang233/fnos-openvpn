@@ -1,0 +1,15 @@
+{
+    ".url": {
+        "openvpn.Application": {
+            "title": "OpenVPN 服务器",
+            "desc": "飞牛私有云 OpenVPN 服务器，外网安全连回家庭网络",
+            "icon": "images/icon_{0}.png",
+            "type": "url",
+            "protocol": "",
+            "gatewayPrefix": "/app/openvpn",
+            "gatewaySocket": "app.sock",
+            "url": "/app/openvpn",
+            "allUsers": true
+        }
+    }
+}

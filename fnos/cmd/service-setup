@@ -1,0 +1,89 @@
+#!/bin/bash
+# openvpn 生命周期脚本 —— 纯 FPK（原生进程，非 Docker），含 Web 管理 UI
+#
+# 本应用【不带 docker-compose】，框架 common 的 DOCKER_NAME 为空，走原生模式：
+# start_daemon 用 PID 文件后台拉起 SERVICE_COMMAND（即 openvpn-supervisor.sh），
+# daemon_status 用 PID 文件判定存活。supervisor 内部同时管理 Web 管理后端与
+# OpenVPN 守护进程两个子进程。
+#
+# 所有二进制（openvpn / openvpn-web / easyrsa / jq / ovpn-helper.sh / openvpn-auth）
+# 与运行库都打进 fpk（fnos/app/bin、fnos/app/lib），安装时不联网，完全离线自包含。
+
+# 官方规范：app/ 目录内容直接映射到 target/（= TRIM_APPDEST），无多余 app/ 层级。
+# 故二进制在 ${TRIM_APPDEST}/bin、运行库在 ${TRIM_APPDEST}/lib、桌面入口在 ${TRIM_APPDEST}/ui。
+APP_BIN_DIR="${TRIM_APPDEST}/bin"
+APP_LIB_DIR="${TRIM_APPDEST}/lib"
+ETC="${TRIM_PKGVAR}/etc"
+CONF="${ETC}/server.conf"
+
+# 0 依赖：让自带 openvpn 优先加载 fpk 内打包的 .so，不依赖宿主机已装库
+export LD_LIBRARY_PATH="${APP_LIB_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# 原生模式：SERVICE_COMMAND 是常驻的 supervisor（框架后台化并写 PID），
+# 由它再去拉起 Web 后端 + OpenVPN 守护进程并转发停止信号。
+# 用 bash 显式解释执行，避免依赖脚本文件自身的 +x 位（noacl 盘 chmod 可能为 no-op）。
+SERVICE_COMMAND="bash ${APP_BIN_DIR}/openvpn-supervisor.sh"
+export SERVICE_COMMAND
+
+# 双模式（端口 + 统一网关，上架规范）：
+# - 端口模式：fnOS 以 http://<NAS-IP>:8833 直连（ui/config openvpn.Application）
+# - 统一网关：fnOS 校验登录态后转发到 /var/apps/openvpn/target/app.sock，
+#   后端在 ${TRIM_APPDEST}/app.sock（= /vol*/@appcenter/openvpn/app.sock）监听 unix socket。
+#   注意官方规范：gatewaySocket 只填文件名（app.sock），socket 放 target 根目录（=TRIM_APPDEST）。
+# 后端双通道共用同一 handler（剥 GATEWAY_PREFIX 前缀 + 3xx Location 重写），两入口互不干扰。
+export SOCKET_PATH="${TRIM_APPDEST}/app.sock"
+export GATEWAY_PREFIX="/app/openvpn"
+
+# 确保数据目录就绪。
+# 重要：不要在此 mknod /dev/net/tun —— mknod 在 fnOS 上会进入不可中断的挂起
+# (seccomp/设备节点受限)，导致 service_prestart 卡死、supervisor 永远无法被拉起
+# （现象：启用成功→异常退出、:8833 无响应）。TUN 设备由 openvpn 在启动 VPN 时按需创建，
+# Web 管理界面(:8833) 的启动根本不需要 TUN。
+_setup() {
+    mkdir -p "${ETC}" "${ETC}/ccd" "${ETC}/clients"
+}
+
+service_preinst() {
+    _setup
+    install_log "OpenVPN 已就绪（Web 管理 UI 端口 8833，VPN 端口 UDP 1194）。"
+}
+
+service_postinst() {
+    _setup
+    # CRITICAL: fnOS 不会自动把 ui/ 解包到 /var/apps/，必须手动建符号链接，
+    # 否则桌面图标不显示、且会以新标签页打开而非内嵌窗口。
+    local APP_BASE="/var/apps/${TRIM_APPNAME}"
+    if [ -d "${TRIM_APPDEST}/ui" ] && [ ! -e "${APP_BASE}/ui" ]; then
+        ln -s "${TRIM_APPDEST}/ui" "${APP_BASE}/ui"
+        install_log "Symlinked ui -> ${APP_BASE}/ui"
+    fi
+    install_log "安装完成。打开 NAS-IP:8833 进入 Web 管理界面（默认账号 admin / admin）。"
+}
+
+service_postupgrade() {
+    # 升级后重新建立 ui/ 符号链接（app.tgz 重新解包会重置目标目录）
+    local APP_BASE="/var/apps/${TRIM_APPNAME}"
+    if [ -d "${TRIM_APPDEST}/ui" ] && [ ! -e "${APP_BASE}/ui" ]; then
+        ln -s "${TRIM_APPDEST}/ui" "${APP_BASE}/ui"
+        install_log "Symlinked ui -> ${APP_BASE}/ui"
+    fi
+}
+
+# 启动 / 重启时确保目录与 TUN 就绪（证书与 server.conf 由 supervisor 首次启动时生成）
+service_prestart() {
+    _setup
+}
+
+service_preuninst() {
+    # 原生模式：框架 stop_daemon 会据 PID 文件停止 supervisor，由其转发信号关闭子进程
+    install_log "正在停止 OpenVPN 与 Web 管理后端..."
+}
+
+service_postuninst() {
+    if [ "${wizard_delete_data}" = "true" ]; then
+        rm -rf "${ETC}" 2>/dev/null || true
+        install_log "已删除应用数据（证书/配置/数据库）"
+    else
+        install_log "已保留应用数据于 ${ETC}"
+    fi
+}

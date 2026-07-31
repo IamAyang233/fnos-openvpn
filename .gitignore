@@ -1,0 +1,18 @@
+# 构建产物：fpk 安装包（多版本历史包不进 git，正式版挂 Release）
+*.fpk
+
+# 二进制编译产物（Go 编译生成，build.sh 会重新构建）
+fnos/app/bin/openvpn-web
+openvpn-web-src/build_err.txt
+
+# 依赖缓存 / 上游源码 / 构建资源 / 测试截图
+.deb_cache/
+upstream/
+vendor/
+qa_shots/
+
+# 临时与日志
+*.tmp
+*.log
+__pycache__/
+*.pyc

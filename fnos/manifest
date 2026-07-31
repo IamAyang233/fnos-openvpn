@@ -1,0 +1,16 @@
+appname         = openvpn
+version         = 1.0.43
+display_name    = OpenVPN 服务器
+desc            = <b>OpenVPN 服务器</b> 为飞牛私有云 (fnOS) 提供基于 OpenVPN 的 VPN 服务，让你在外网也能安全连回家庭网络，访问飞牛与内网设备。<br><br><b>功能：</b><br>- 内置 Web 管理界面（默认账号 admin / admin，建议首次登录修改密码）：生成/下载客户端配置、证书管理、账号与 MFA、连接历史、在线编辑 server.conf、一键重启<br>- 社区版 OpenVPN，无并发连接数限制，可创建任意数量客户端<br>- 证书由内置 easyrsa 离线生成，客户端配置导出即用<br>- Web 管理界面经统一网关 /app/openvpn 打开（复用 NAS 登录态，不对外暴露独立端口）<br>- VPN 接入端口 UDP/TCP 1194（可在设置页切换）<br>- 数据（证书 / 配置 / 数据库）持久化到应用数据卷，重装或升级不丢失<br><br><b>适用前提：</b><br>- 从外网连接需在路由器转发 UDP/TCP 1194 端口（端口转发 / DDNS / 公网 IP）<br>- 需 root 启动以创建 TUN 设备并加载 nft 防火墙规则（官方权限规范允许的必要场景）；OpenVPN 数据通道已按官方建议降权至 nobody 运行<br><br><b>来源与许可：</b>OpenVPN 为 GPLv2（Community Edition）。本 FPK 由 Panda（www.aykeji.cn）打包发布。<br><b>项目仓库：</b>https://github.com/IamAyang233/fnos-openvpn
+changelog       = 【v1.0.43】简化应用介绍：去除「纯 FPK」说明，精简功能/依赖描述。<br>【v1.0.42】防火墙规则同时放行 1194/udp 与 1194/tcp：设置页可随时切换 UDP/TCP 协议并重启生效（切换式支持，无需改防火墙）。<br>【v1.0.41】移除冗余的「防火墙」页面（仅静态端口信息且 8833 信息已过时）；拉黑/限速功能保留在在线客户端操作按钮。<br>【v1.0.40】在线客户端分页每页 3 条（原 5 条）。<br>【v1.0.39】UI 分页完善：连接记录每页 10 条（原 50 条导致记录少时不分页）；客户端、用户列表增加分页（每页 10 条）；在线客户端分页（每页 5 条）。<br>【v1.0.38】设置页修复：① 改管理员密码校验与后端强密码规则对齐（原≥8位会前端过、后端拒且静默失败）；② 修改端口/协议/子网后提示需「重启服务」生效；③ session 过期(401)自动跳转登录页。<br>【v1.0.37】修复初始化向导：① system.base.init_done 曾被 forbidden 拦截导致向导 finish 无效、每次打开都自动弹向导（bootstrap 增加 CA 存在即视为已初始化兼容存量）；② 向导密码校验与后端强密码规则对齐（≥12位含大小写数字特殊符）。<br>【v1.0.36】修复仪表盘「在线客户端 0/N」分母统计：改为按 pki 客户端证书数统计（原按 clients/ 下载目录条目数，混入杂项会污染计数）。<br>【v1.0.35】权限合规整改（上架要求）：OpenVPN 数据通道降权至 nobody 运行（root 仅用于 TUN 创建/nft 加载等特权准备），符合官方应用权限规范「长期运行进程非 root」建议。<br>【v1.0.34】切换为纯统一网关模式：Web 管理界面仅经 /app/openvpn 访问（复用 NAS 登录态），移除 8833 端口入口与端口直连，安全收敛。<br>【v1.0.33】新增统一网关入口 /app/openvpn（复用 NAS 登录态），与 8833 端口直连双入口共存；修复应用中心「打开」按钮（桌面入口注册）。<br>【v1.0.32】修复桌面入口注册（app.tgz 结构对齐官方规范），应用中心恢复「打开」按钮与桌面图标。<br>【v1.0.21】仪表盘证书计数修复；v1.0.19 安全审计 12 项修复；v1.0.18 统一北京时区；v1.0.17 连接记录分页；v1.0.16 今日连接统计；v1.0.15 连接记录时间显示修复。
+platform        = x86
+source          = thirdparty
+maintainer      = OpenVPN Technologies / Community
+maintainer_url  = https://github.com/OpenVPN/openvpn
+distributor     = Panda
+distributor_url = https://www.aykeji.cn
+ctl_stop        = true
+os_min_version  = 1.1.3100
+desktop_uidir   = ui
+desktop_applaunchname = openvpn.Application
+checksum        =

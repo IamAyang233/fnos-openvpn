@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OpenVPN 管理控制台</title>
+<link rel="stylesheet" href="static/css/index.css" />
+</head>
+<body>
+
+<!-- SVG sprite -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></symbol>
+    <symbol id="i-client" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></symbol>
+    <symbol id="i-cert" viewBox="0 0 24 24"><circle cx="12" cy="9" r="6"/><path d="M9 14l-2 7 5-3 5 3-2-7"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11.5v4.5"/><path d="M12 8h.01"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 21V9M7 14l5-5 5 5M5 3h14"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5L19 7"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="8" r="4"/><path d="M11 11l9 9M16 16l2-2M19 19l2-2"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/></symbol>
+  </defs>
+</svg>
+
+<div class="app" id="app">
+  <!-- Sidebar -->
+  <aside class="sidebar" aria-label="主导航">
+    <div class="brand">
+      <span class="logo"><svg class="icon"><use href="#i-shield"/></svg></span>
+      <span class="name">OpenVPN</span>
+    </div>
+    <nav class="nav">
+      <div class="nav-group">
+        <a class="nav-item active" data-screen="dashboard" href="#"><svg class="icon"><use href="#i-dash"/></svg><span class="nav-label">仪表盘</span></a>
+        <a class="nav-item" data-screen="clients" href="#"><svg class="icon"><use href="#i-client"/></svg><span class="nav-label">客户端</span></a>
+        <a class="nav-item" data-screen="users" href="#"><svg class="icon"><use href="#i-user"/></svg><span class="nav-label">用户</span></a>
+        <a class="nav-item" data-screen="certs" href="#"><svg class="icon"><use href="#i-cert"/></svg><span class="nav-label">证书</span></a>
+        <a class="nav-item" data-screen="history" href="#"><svg class="icon"><use href="#i-history"/></svg><span class="nav-label">连接记录</span></a>
+        <a class="nav-item" data-screen="settings" href="#"><svg class="icon"><use href="#i-gear"/></svg><span class="nav-label">设置</span></a>
+      </div>
+    </nav>
+  </aside>
+  <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+
+  <!-- Main -->
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn" id="menuBtn" aria-label="切换菜单"><svg class="icon"><use href="#i-menu"/></svg></button>
+      <div>
+        <div class="page-title" id="pageTitle">仪表盘</div>
+        <div class="crumb" id="pageCrumb">OpenVPN 服务器</div>
+      </div>
+      <div class="spacer"></div>
+      <button class="btn btn-primary btn-sm" id="wizardBtn"><svg class="icon icon-sm"><use href="#i-key"/></svg>初始化向导</button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" aria-pressed="false"><svg class="icon" id="themeIcon"><use href="#i-moon"/></svg></button>
+      <div class="avatar" title="admin">A</div>
+      <button class="icon-btn" id="logoutBtn" title="退出登录" aria-label="退出登录"><svg class="icon"><use href="#i-logout"/></svg></button>
+    </header>
+
+    <main class="content">
+      <!-- Dashboard -->
+      <section data-panel="dashboard">
+        <div class="grid stats">
+          <div class="card stat"><div class="k"><span class="ic"><svg class="icon icon-sm"><use href="#i-client"/></svg></span>在线客户端</div><div class="v"><span id="statOnline">0</span> <small>/ <span id="statTotal">0</span></small></div></div>
+          <div class="card stat"><div class="k"><span class="ic"><svg class="icon icon-sm"><use href="#i-history"/></svg></span>今日连接</div><div class="v" id="statToday">0</div></div>
+          <div class="card stat"><div class="k"><span class="ic"><svg class="icon icon-sm"><use href="#i-bolt"/></svg></span>实时速率</div><div class="v"><span id="statRate">0</span><small> Mbps</small></div></div>
+          <div class="card stat"><div class="k"><span class="ic"><svg class="icon icon-sm"><use href="#i-download"/></svg></span>下载流量</div><div class="v"><span id="statDownload">0</span></div></div>
+          <div class="card stat"><div class="k"><span class="ic"><svg class="icon icon-sm"><use href="#i-upload"/></svg></span>上传流量</div><div class="v"><span id="statUpload">0</span></div></div>
+          <div class="card stat"><div class="k"><span class="ic"><svg class="icon icon-sm"><use href="#i-shield"/></svg></span>服务状态</div><div class="v" style="font-size:18px;margin-top:12px;"><span class="badge" id="statStatusBadge"><span class="dot"></span><span id="statStatus">—</span></span></div></div>
+        </div>
+
+        <div class="grid two-col" style="margin-top:16px">
+          <div class="card">
+            <h3>在线客户端</h3>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>名称</th><th>虚拟 IP</th><th>速率</th><th>时长</th><th>下载</th><th>上传</th><th style="text-align:right">操作</th></tr></thead>
+                <tbody id="onlineTbody">
+                  <tr><td colspan="7" class="empty">加载中…</td></tr>
+                </tbody>
+              </table>
+              <div class="pager" id="onlinePgRoot" hidden>
+                <span class="pager-info" id="onlinePgInfo">共 0 条</span>
+                <div class="pager-ctrls">
+                  <button class="btn btn-sm" id="onlinePgFirst">首页</button>
+                  <button class="btn btn-sm" id="onlinePgPrev">上页</button>
+                  <span class="pager-page" id="onlinePgPage">1 / 1</span>
+                  <button class="btn btn-sm" id="onlinePgNext">下页</button>
+                  <button class="btn btn-sm" id="onlinePgLast">末页</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>服务器信息</h3>
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3)">对外地址</span><span class="mono" id="siAddress">—</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3)">协议</span><span id="siProto">—</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3)">子网</span><span class="mono" id="siSubnet">—</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3)">最大客户端</span><span id="siMax">—</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3)">证书</span><span class="badge on" id="siCert"><span class="dot"></span>有效</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3)">版本</span><span class="mono" id="siVersion">—</span></div>
+            </div>
+            <button class="btn btn-sm" id="restartSrvBtn" style="margin-top:16px"><svg class="icon icon-sm"><use href="#i-bolt"/></svg>重启服务</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Clients -->
+      <section data-panel="clients" hidden>
+        <div class="section-head">
+          <h2>客户端</h2>
+          <div class="spacer"></div>
+          <div style="position:relative"><svg class="icon" style="position:absolute;left:11px;top:9px;color:var(--text-3)"><use href="#i-search"/></svg><input class="input" id="clientSearch" style="padding-left:34px;width:220px" placeholder="搜索客户端" /></div>
+          <button class="btn btn-primary btn-sm" id="addClientBtn"><svg class="icon icon-sm"><use href="#i-plus"/></svg>添加客户端</button>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>名称</th><th>虚拟 IP</th><th>状态</th><th>最近连接</th><th>累计下载</th><th>累计上传</th><th style="text-align:right">操作</th></tr></thead>
+              <tbody id="clientsTbody"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+            </table>
+            <div class="pager" id="clientPgRoot" hidden>
+              <span class="pager-info" id="clientPgInfo">共 0 条</span>
+              <div class="pager-ctrls">
+                <button class="btn btn-sm" id="clientPgFirst">首页</button>
+                <button class="btn btn-sm" id="clientPgPrev">上页</button>
+                <span class="pager-page" id="clientPgPage">1 / 1</span>
+                <button class="btn btn-sm" id="clientPgNext">下页</button>
+                <button class="btn btn-sm" id="clientPgLast">末页</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Users -->
+      <section data-panel="users" hidden>
+        <div class="section-head"><h2>用户</h2><div class="spacer"></div><button class="btn btn-primary btn-sm" id="addUserBtn"><svg class="icon icon-sm"><use href="#i-plus"/></svg>添加用户</button></div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>用户名</th><th>姓名</th><th>状态</th><th>累计下载</th><th>累计上传</th><th style="text-align:right">操作</th></tr></thead>
+              <tbody id="usersTbody"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+            </table>
+            <div class="pager" id="userPgRoot" hidden>
+              <span class="pager-info" id="userPgInfo">共 0 条</span>
+              <div class="pager-ctrls">
+                <button class="btn btn-sm" id="userPgFirst">首页</button>
+                <button class="btn btn-sm" id="userPgPrev">上页</button>
+                <span class="pager-page" id="userPgPage">1 / 1</span>
+                <button class="btn btn-sm" id="userPgNext">下页</button>
+                <button class="btn btn-sm" id="userPgLast">末页</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Certs -->
+      <section data-panel="certs" hidden>
+        <div class="section-head"><h2>证书</h2><div class="spacer"></div><button class="btn btn-sm" id="certManageBtn"><svg class="icon icon-sm"><use href="#i-gear"/></svg>证书管理</button></div>
+        <div class="grid stats">
+          <div class="card stat"><div class="k">CA 证书</div><div class="v" style="font-size:16px;margin-top:10px"><span class="badge" id="certCA"><span class="dot"></span>—</span></div></div>
+          <div class="card stat"><div class="k">服务端证书</div><div class="v" style="font-size:16px;margin-top:10px"><span class="badge" id="certServer"><span class="dot"></span>—</span></div></div>
+          <div class="card stat"><div class="k">客户端证书</div><div class="v" id="certClient">0</div></div>
+          <div class="card stat"><div class="k">已吊销</div><div class="v" id="certRevoked">0</div></div>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden;margin-top:16px">
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>类型</th><th>名称 / CN</th><th>过期时间</th><th>状态</th><th style="text-align:right">操作</th></tr></thead>
+              <tbody id="certsTbody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- History -->
+      <section data-panel="history" hidden>
+        <div class="section-head"><h2>连接记录</h2></div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>时间</th><th>用户</th><th>客户端</th><th>虚拟 IP</th><th>结果</th></tr></thead>
+              <tbody id="historyTbody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+            </table>
+          </div>
+          <div class="pager">
+            <span class="pager-info" id="histCount">共 0 条</span>
+            <div class="pager-ctrls">
+              <button class="btn btn-sm" id="histFirst">首页</button>
+              <button class="btn btn-sm" id="histPrev">上页</button>
+              <span class="pager-page" id="histPage">1 / 1</span>
+              <button class="btn btn-sm" id="histNext">下页</button>
+              <button class="btn btn-sm" id="histLast">末页</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <section data-panel="settings" hidden>
+        <div class="section-head"><h2>设置</h2></div>
+        <div class="card" style="max-width:680px">
+          <h3>服务器</h3>
+          <div class="field"><label>对外 IP 或域名</label><input class="input" id="setAddr" value="" /><div class="hint">从外网连接请填公网 IP 或域名；仅内网使用可填 NAS 内网 IP。</div></div>
+          <div class="input-group">
+            <div class="field" style="flex:1"><label>端口</label><input class="input" id="setPort" value="" /></div>
+            <div class="field" style="flex:1"><label>协议</label><select class="input" id="setProto"><option value="udp">UDP</option><option value="tcp">TCP</option></select></div>
+          </div>
+          <div class="field"><label>子网</label><input class="input" id="setSubnet" value="" /></div>
+          <hr style="border:none;border-top:1px solid var(--border-2);margin:18px 0" />
+          <h3>管理员密码</h3>
+          <div class="input-group">
+            <div class="field" style="flex:1"><label>新密码</label><input class="input" type="password" id="setPass" placeholder="至少 8 位" /></div>
+            <div class="field" style="flex:1"><label>确认密码</label><input class="input" type="password" id="setPass2" placeholder="再次输入" /></div>
+          </div>
+          <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:6px">
+            <button class="btn" id="cancelSettings">取消</button>
+            <button class="btn btn-primary" id="saveSettings">保存</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- Wizard modal -->
+<div class="overlay" id="wizardOverlay" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="wizTitle">
+    <div class="modal-head"><h3 id="wizTitle">OpenVPN 初始化向导</h3><button class="icon-btn" aria-label="关闭" id="wizClose" style="margin-left:auto"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="modal-body">
+      <div class="steps" id="wizSteps">
+        <div class="step active" data-s="1"><span class="num">1</span>管理员密码</div>
+        <div class="step" data-s="2"><span class="num">2</span>对外地址</div>
+        <div class="step" data-s="3"><span class="num">3</span>拨号账号</div>
+        <div class="step" data-s="4"><span class="num">4</span>客户端配置</div>
+      </div>
+      <div class="wpanel" data-wp="1">
+        <h3 style="margin:0 0 4px">设置管理员密码</h3>
+        <p class="sub" style="margin:0 0 14px">默认密码为 admin，请设置一个更安全的密码。</p>
+        <div class="field"><label>新密码</label><input class="input" type="password" id="wizPass1" placeholder="至少 8 位" /></div>
+        <div class="field"><label>确认密码</label><input class="input" type="password" id="wizPass2" placeholder="再次输入" /></div>
+        <div class="err" id="wizErr1"></div>
+      </div>
+      <div class="wpanel" data-wp="2" hidden>
+        <h3 style="margin:0 0 4px">服务器对外访问地址</h3>
+        <p class="sub" style="margin:0 0 14px">用于生成客户端配置里的连接地址。从外网连接请填公网 IP 或域名；仅内网使用可填 NAS 内网 IP。</p>
+        <div class="field"><label>对外 IP 或域名</label><input class="input" id="wizAddr" placeholder="例如 vpn.example.com 或 1.2.3.4" /></div>
+        <div class="input-group">
+          <div class="field" style="flex:2"><label>端口</label><input class="input" id="wizPort" value="1194" /></div>
+          <div class="field" style="flex:1"><label>协议</label><select class="input" id="wizProto"><option value="udp">UDP</option><option value="tcp">TCP</option></select></div>
+        </div>
+        <div class="err" id="wizErr2"></div>
+      </div>
+      <div class="wpanel" data-wp="3" hidden>
+        <h3 style="margin:0 0 4px">创建拨号账号</h3>
+        <p class="sub" style="margin:0 0 14px">连接 VPN 时需要用账号密码认证。</p>
+        <div class="field"><label>用户名</label><input class="input" id="wizUser" placeholder="拨号用户名" /></div>
+        <div class="field"><label>密码</label><input class="input" type="password" id="wizUserPass1" placeholder="至少 6 位" /></div>
+        <div class="field"><label>确认密码</label><input class="input" type="password" id="wizUserPass2" placeholder="再次输入" /></div>
+        <div class="err" id="wizErr3"></div>
+      </div>
+      <div class="wpanel" data-wp="4" hidden>
+        <h3 style="margin:0 0 4px">生成客户端配置</h3>
+        <p class="sub" style="margin:0 0 14px">输入客户端名称，生成 .ovpn 配置（已包含上面的对外地址），下载后导入 OpenVPN 客户端即可连接。</p>
+        <div class="field"><label>客户端名称</label><input class="input" id="wizClient" value="my-device" /></div>
+        <div class="alert" id="wizDone" hidden style="background:var(--success-soft);color:var(--success);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">已生成并开始下载，点「完成」结束向导。</div>
+        <div class="err" id="wizErr4"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="wizPrev" hidden>上一步</button>
+      <button class="btn btn-primary" id="wizNext">下一步</button>
+      <button class="btn" id="wizGen" hidden>生成并下载</button>
+      <button class="btn btn-primary" id="wizFinish" hidden disabled>完成</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit user modal -->
+<div class="overlay" id="editUserModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="editUserTitle">
+    <div class="modal-head"><h3 id="editUserTitle">编辑用户</h3><button class="icon-btn" aria-label="关闭" id="editUserClose" style="margin-left:auto"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="modal-body">
+      <input type="hidden" id="euId" />
+      <div class="field"><label>用户名</label><input class="input" id="euUsername" readonly /></div>
+      <div class="input-group">
+        <div class="field" style="flex:1"><label>姓名</label><input class="input" id="euName" placeholder="可选" /></div>
+        <div class="field" style="flex:1"><label>邮箱</label><input class="input" id="euEmail" placeholder="可选" /></div>
+      </div>
+      <div class="input-group">
+        <div class="field" style="flex:1"><label>IP 地址</label><input class="input" id="euIpAddr" placeholder="可选，留空自动分配" /></div>
+        <div class="field" style="flex:1"><label>分组</label><select class="input" id="euGid"></select></div>
+      </div>
+      <div class="input-group">
+        <div class="field" style="flex:1"><label>VPN 配置(客户端)</label><select class="input" id="euOvpnConfig"></select></div>
+        <div class="field" style="flex:1"><label>过期时间</label><input class="input" type="date" id="euExpireDate" /></div>
+      </div>
+      <div class="field"><label>重置密码</label><input class="input" type="password" id="euPassword" placeholder="留空则不修改（至少 6 位）" autocomplete="new-password" /></div>
+      <div class="err" id="euErr"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="editUserCancel">取消</button>
+      <button class="btn btn-primary" id="editUserSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="clientEditModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="clientEditTitle">
+    <div class="modal-head"><h3 id="clientEditTitle">编辑客户端</h3><button class="icon-btn" aria-label="关闭" id="clientEditClose" style="margin-left:auto"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="modal-body">
+      <input type="hidden" id="ceName" />
+      <div class="field"><label>客户端名称</label><input class="input" id="ceNameShow" readonly /></div>
+      <div class="field"><label>静态 IP（固定分配）</label><input class="input" id="ceIp" placeholder="留空则自动分配，例如 10.8.0.5" /></div>
+      <div class="err" id="ceErr"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="clientEditDownload">下载配置</button>
+      <span style="flex:1"></span>
+      <button class="btn" id="clientEditCancel">取消</button>
+      <button class="btn btn-primary" id="clientEditSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="promptModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="promptTitle">
+    <div class="modal-head"><h3 id="promptTitle">提示</h3><button class="icon-btn" aria-label="关闭" id="promptClose" style="margin-left:auto"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="modal-body">
+      <div class="field"><input class="input" id="promptInput" autocomplete="off" /></div>
+      <div class="err" id="promptErr"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="promptCancel">取消</button>
+      <button class="btn btn-primary" id="promptOk">确定</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="addUserModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="addUserTitle">
+    <div class="modal-head"><h3 id="addUserTitle">添加用户</h3><button class="icon-btn" aria-label="关闭" id="addUserClose" style="margin-left:auto"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="modal-body">
+      <div class="field"><label>用户名</label><input class="input" id="auUsername" placeholder="拨号用户名" autocomplete="off" /></div>
+      <div class="field"><label>密码</label><input class="input" type="password" id="auPassword" placeholder="至少 6 位" autocomplete="new-password" /></div>
+      <div class="err" id="auErr"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="addUserCancel">取消</button>
+      <button class="btn btn-primary" id="addUserSave">添加</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="certManageModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="certManageTitle">
+    <div class="modal-head"><h3 id="certManageTitle">证书管理</h3><button class="icon-btn" aria-label="关闭" id="certManageClose" style="margin-left:auto"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="modal-body">
+      <div class="field"><label>CA 根证书</label><button class="btn btn-sm" id="caDownloadBtn"><svg class="icon icon-sm"><use href="#i-download"/></svg>下载 CA 证书</button></div>
+      <div class="field"><label>服务端证书续期</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="input" id="renewDays" type="number" min="1" value="365" style="width:110px" />
+          <span class="muted">天</span>
+          <button class="btn btn-primary btn-sm" id="renewServerBtn">续期</button>
+        </div>
+        <div class="err" id="certManageErr"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span style="flex:1"></span>
+      <button class="btn" id="certManageCancel">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="certDetailModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="certDetailTitle">
+    <div class="modal-head"><h3 id="certDetailTitle">证书详情</h3><button class="icon-btn" aria-label="关闭" id="certDetailClose" style="margin-left:auto"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="modal-body">
+      <div class="field"><label>类型</label><div id="cdType" class="mono">—</div></div>
+      <div class="field"><label>主体 (Subject)</label><div id="cdSubject" class="mono" style="word-break:break-all">—</div></div>
+      <div class="field"><label>签发者 (Issuer)</label><div id="cdIssuer" class="mono" style="word-break:break-all">—</div></div>
+      <div class="field"><label>序列号</label><div id="cdSerial" class="mono" style="word-break:break-all">—</div></div>
+      <div class="field"><label>生效时间</label><div id="cdNotBefore" class="mono">—</div></div>
+      <div class="field"><label>过期时间</label><div id="cdNotAfter" class="mono">—</div></div>
+      <div class="field"><label>剩余有效期</label><div id="cdExpiresIn" class="mono">—</div></div>
+      <div class="field"><label>状态</label><div id="cdStatus">—</div></div>
+    </div>
+    <div class="modal-foot">
+      <span style="flex:1"></span>
+      <button class="btn" id="certDetailCancel">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="static/js/index.js" defer></script>
+</body>
+</html>

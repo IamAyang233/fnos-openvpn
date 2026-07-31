@@ -1,0 +1,242 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/spf13/viper"
+	"golang.org/x/crypto/bcrypt"
+)
+
+type SysBeseConfig struct {
+	SiteUrl              string `json:"site_url" mapstructure:"site_url"`
+	WebPort              string `json:"web_port" mapstructure:"web_port"`
+	AdminUsername        string `json:"admin_username" mapstructure:"admin_username"`
+	AdminPassword        string `json:"admin_password" mapstructure:"admin_password"`
+	AutoUpdateOvpnConfig bool   `json:"auto_update_ovpn_config" mapstructure:"auto_update_ovpn_config"`
+	MaxDuplicateLogin    int    `json:"max_duplicate_login" mapstructure:"max_duplicate_login"`
+	HistoryMaxDays       int    `json:"history_max_days" mapstructure:"history_max_days"`
+	ValidateClientConfig bool   `json:"validate_client_config" mapstructure:"validate_client_config"`
+}
+
+type SysLdapConfig struct {
+	LdapAuth               bool   `json:"ldap_auth" mapstructure:"ldap_auth"`
+	LdapUrl                string `json:"ldap_url" mapstructure:"ldap_url"`
+	LdapBaseDn             string `json:"ldap_base_dn" mapstructure:"ldap_base_dn"`
+	LdapUserAttribute      string `json:"ldap_user_attribute" mapstructure:"ldap_user_attribute"`
+	LdapUserGroupFilter    bool   `json:"ldap_user_group_filter" mapstructure:"ldap_user_group_filter"`
+	LdapUserGroupDn        string `json:"ldap_user_group_dn" mapstructure:"ldap_user_group_dn"`
+	LdapUserAttrIpaddrName string `json:"ldap_user_attr_ipaddr_name" mapstructure:"ldap_user_attr_ipaddr_name"`
+	LdapUserAttrConfigName string `json:"ldap_user_attr_config_name" mapstructure:"ldap_user_attr_config_name"`
+	LdapBindUserDn         string `json:"ldap_bind_user_dn" mapstructure:"ldap_bind_user_dn"`
+	LdapBindPassword       string `json:"ldap_bind_password" mapstructure:"ldap_bind_password"`
+}
+
+type SysEmailConfig struct {
+	SendSubjectPrefix string  `json:"send_subject_prefix" mapstructure:"send_subject_prefix"`
+	SendFrom          string  `json:"send_from" mapstructure:"send_from"`
+	Host              string  `json:"host" mapstructure:"host"`
+	Port              int     `json:"port" mapstructure:"port"`
+	Username          string  `json:"username" mapstructure:"username"`
+	Password          string  `json:"password" mapstructure:"password"`
+	Security          *string `json:"security" mapstructure:"security"`
+}
+
+type ClientUrlConfig struct {
+	Windows string `json:"windows" mapstructure:"windows"`
+	Linux   string `json:"linux" mapstructure:"linux"`
+	Macos   string `json:"macos" mapstructure:"macos"`
+	Ios     string `json:"ios" mapstructure:"ios"`
+	Android string `json:"android" mapstructure:"android"`
+}
+
+type OvpnConfig struct {
+	OvpnPort       int    `json:"ovpn_port" mapstructure:"ovpn_port"`
+	OvpnProto      string `json:"ovpn_proto" mapstructure:"ovpn_proto"`
+	OvpnSubnet     string `json:"ovpn_subnet" mapstructure:"ovpn_subnet"`
+	OvpnMaxClients int    `json:"ovpn_max_clients" mapstructure:"ovpn_max_clients"`
+	OvpnGateway    bool   `json:"ovpn_gateway" mapstructure:"ovpn_gateway"`
+	OvpnManagement string `json:"ovpn_management" mapstructure:"ovpn_management"`
+	OvpnIpv6       bool   `json:"ovpn_ipv6" mapstructure:"ovpn_ipv6"`
+	OvpnSubnet6    string `json:"ovpn_subnet6" mapstructure:"ovpn_subnet6"`
+	OvpnPushDns1   string `json:"ovpn_push_dns1" mapstructure:"ovpn_push_dns1"`
+	OvpnPushDns2   string `json:"ovpn_push_dns2" mapstructure:"ovpn_push_dns2"`
+}
+
+type config struct {
+	System struct {
+		Base  SysBeseConfig  `json:"base" mapstructure:"base"`
+		Ldap  SysLdapConfig  `json:"ldap" mapstructure:"ldap"`
+		Email SysEmailConfig `json:"email" mapstructure:"email"`
+	} `json:"system" mapstructure:"system"`
+	Client struct {
+		ClientUrl ClientUrlConfig `json:"client_url" mapstructure:"client_url"`
+	} `json:"client" mapstructure:"client"`
+	Openvpn OvpnConfig `json:"openvpn" mapstructure:"openvpn"`
+}
+
+var (
+	webPort                string
+	secretKey              string
+	adminUsername          string
+	adminPassword          string
+	ldapAuth               bool
+	ldapURL                string
+	ldapBaseDn             string
+	ldapUserAttribute      string
+	ldapUserGroupFilter    bool
+	ldapUserGroupDn        string
+	ldapUserAttrIpaddrName string
+	ldapUserAttrConfigName string
+	ldapBindUserDn         string
+	ldapBindPassword       string
+	nftTableName           string
+
+	ovManage string
+)
+
+func initConfig() {
+	sk := genRandomString(50)
+	passwd, _ := bcrypt.GenerateFromPassword([]byte("admin"), 12)
+
+	viper.SetDefault("system.base.site_url", "http://127.0.0.1:8833")
+	viper.SetDefault("system.base.web_port", "8833")
+	viper.SetDefault("system.base.secret_key", sk)
+	viper.SetDefault("system.base.server_cn", "ovpn_"+genRandomString(16))
+	viper.SetDefault("system.base.server_name", "server_"+genRandomString(16))
+	viper.SetDefault("system.base.admin_username", "admin")
+	viper.SetDefault("system.base.admin_password", string(passwd))
+	viper.SetDefault("system.base.auto_update_ovpn_config", false)
+	viper.SetDefault("system.base.max_duplicate_login", 0)
+	viper.SetDefault("system.base.validate_client_config", false)
+	viper.SetDefault("system.base.history_max_days", 90)
+	viper.SetDefault("system.base.nft_table_name", "openvpn-nft")
+	viper.SetDefault("system.base.server_addr", "")
+	viper.SetDefault("system.base.init_done", false)
+	viper.SetDefault("system.ldap.ldap_auth", false)
+	viper.SetDefault("system.ldap.ldap_url", "ldap://example.org:389")
+	viper.SetDefault("system.ldap.ldap_base_dn", "dc=example,dc=org")
+	viper.SetDefault("system.ldap.ldap_user_attribute", "uid")
+	viper.SetDefault("system.ldap.ldap_user_group_filter", false)
+	viper.SetDefault("system.ldap.ldap_user_group_dn", "cn=vpn,ou=groups,dc=example,dc=org")
+	viper.SetDefault("system.ldap.ldap_user_attr_ipaddr_name", "ipaddr")
+	viper.SetDefault("system.ldap.ldap_user_attr_config_name", "config")
+	viper.SetDefault("system.ldap.ldap_bind_user_dn", "cn=admin,dc=example,dc=org")
+	viper.SetDefault("system.ldap.ldap_bind_password", "adminpassword")
+	viper.SetDefault("system.email.send_subject_prefix", "【openvpn-web】")
+	viper.SetDefault("system.email.send_from", "")
+	viper.SetDefault("system.email.host", "")
+	viper.SetDefault("system.email.port", 25)
+	viper.SetDefault("system.email.username", "")
+	viper.SetDefault("system.email.password", "")
+	viper.SetDefault("system.email.security", nil)
+
+	viper.SetDefault("client.client_url.windows", "https://openvpn.net/downloads/openvpn-connect-v3-windows.msi")
+	viper.SetDefault("client.client_url.macos", "https://openvpn.net/downloads/openvpn-connect-v3-macos.dmg")
+	viper.SetDefault("client.client_url.linux", "https://openvpn.net/openvpn-client-for-linux/")
+	viper.SetDefault("client.client_url.android", "https://play.google.com/store/apps/details?id=net.openvpn.openvpn")
+	viper.SetDefault("client.client_url.ios", "https://itunes.apple.com/us/app/openvpn-connect/id590379981?mt=8")
+
+	viper.SetDefault("openvpn.ovpn_port", 1194)
+	viper.SetDefault("openvpn.ovpn_proto", "udp")
+	viper.SetDefault("openvpn.ovpn_subnet", "10.8.0.0/24")
+	viper.SetDefault("openvpn.ovpn_max_clients", 200)
+	viper.SetDefault("openvpn.ovpn_gateway", false)
+	viper.SetDefault("openvpn.ovpn_management", "127.0.0.1:7505")
+	viper.SetDefault("openvpn.ovpn_ipv6", false)
+	viper.SetDefault("openvpn.ovpn_subnet6", "fdaf:f178:e916:6dd0::/64")
+	viper.SetDefault("openvpn.ovpn_push_dns1", "8.8.8.8")
+	viper.SetDefault("openvpn.ovpn_push_dns2", "2001:4860:4860::8888")
+
+	viper.SetConfigName("config")
+	viper.SetConfigType("json")
+	viper.SetConfigPermissions(0600)
+	viper.AddConfigPath(ovData)
+
+	viper.SafeWriteConfig()
+
+	err := viper.ReadInConfig()
+	if err != nil {
+		panic(err)
+	}
+
+	// one-shot admin password reset: if etc/.resetpw exists, set admin_password
+	// to its (trimmed) contents as a fresh bcrypt hash, then remove the flag.
+	if rp, rerr := os.ReadFile(filepath.Join(ovData, ".resetpw")); rerr == nil {
+		h, _ := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(string(rp))), 12)
+		viper.Set("system.base.admin_password", string(h))
+		viper.WriteConfig()
+		loadConfig()
+		os.Remove(filepath.Join(ovData, ".resetpw"))
+	}
+
+	if !viper.IsSet("system.base.token") {
+		viper.Set("system.base.token", "ovpntoken"+genRandomString(16))
+		viper.WriteConfig()
+	}
+
+	var lastEventTime time.Time
+	viper.OnConfigChange(func(e fsnotify.Event) {
+		now := time.Now()
+		if now.Sub(lastEventTime) < 500*time.Millisecond {
+			return
+		}
+		lastEventTime = now
+
+		loadConfig()
+		upadteOvpnConfig()
+	})
+
+	viper.WatchConfig()
+}
+
+func upadteOvpnConfig() {
+	if viper.GetBool("system.base.auto_update_ovpn_config") {
+		cfg, err := initOvpnConfig()
+		if err != nil {
+			logger.Error(context.Background(), err.Error())
+			return
+		}
+
+		for k, v := range viper.GetStringMap("openvpn") {
+			if k == "ovpn_push_dns1" || k == "ovpn_push_dns2" {
+				continue
+			}
+
+			cfg.Update("openvpn."+k, fmt.Sprintf("%v", v))
+		}
+
+		cfg.Set("setenv auth_api", fmt.Sprintf("http://127.0.0.1:%s/login", webPort))
+		cfg.Set("setenv ovpn_auth_api", fmt.Sprintf("http://127.0.0.1:%s/ovpn/login", webPort))
+		cfg.Set("setenv ovpn_history_api", fmt.Sprintf("http://127.0.0.1:%s/ovpn/history", webPort))
+		cfg.Save()
+	}
+}
+
+func loadConfig() {
+	secretKey = viper.GetString("system.base.secret_key")
+	nftTableName = viper.GetString("system.base.nft_table_name")
+
+	viper.Unmarshal(&conf)
+
+	webPort = conf.System.Base.WebPort
+	adminUsername = conf.System.Base.AdminUsername
+	adminPassword = conf.System.Base.AdminPassword
+	ldapAuth = conf.System.Ldap.LdapAuth
+	ldapURL = conf.System.Ldap.LdapUrl
+	ldapBaseDn = conf.System.Ldap.LdapBaseDn
+	ldapUserAttribute = conf.System.Ldap.LdapUserAttribute
+	ldapUserGroupFilter = conf.System.Ldap.LdapUserGroupFilter
+	ldapUserGroupDn = conf.System.Ldap.LdapUserGroupDn
+	ldapUserAttrIpaddrName = conf.System.Ldap.LdapUserAttrIpaddrName
+	ldapUserAttrConfigName = conf.System.Ldap.LdapUserAttrConfigName
+	ldapBindUserDn = conf.System.Ldap.LdapBindUserDn
+	ldapBindPassword = conf.System.Ldap.LdapBindPassword
+
+	ovManage = conf.Openvpn.OvpnManagement
+}
