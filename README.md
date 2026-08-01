@@ -14,6 +14,15 @@
 - 接入端口 **UDP / TCP 1194**（设置页可随时切换，防火墙已同时放行）
 - Web 管理界面经**统一网关 `/app/openvpn`** 打开（复用 NAS 登录态，不对外暴露独立端口）
 - 数据（证书 / 配置 / 数据库）持久化到应用数据卷，重装或升级不丢失
+![image.png](data/attachment/forum/202608/01/205941bqzb2qxx9nxfr1g2.png "image.png")
+
+![image.png](data/attachment/forum/202608/01/210001bn1tdftzndkzm303.png "image.png")
+
+![image.png](data/attachment/forum/202608/01/210019iez3w6n6fw63n56u.png "image.png")
+
+![image.png](data/attachment/forum/202608/01/210033pvohvoizov2vwt78.png "image.png")
+
+![image.png](data/attachment/forum/202608/01/210047ej39lcfee7iylle1.png "image.png")
 
 ## 适用前提
 
