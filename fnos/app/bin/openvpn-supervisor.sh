@@ -196,8 +196,36 @@ cleanup() {
 }
 trap cleanup TERM INT
 
+# ===== 健康自愈：status 文件新鲜度检测 =====
+# openvpn 正常时每 60s 写一次 openvpn-status.log。若进程还活着但 status 超过
+# 120s 未更新，说明隧道/数据通道已失效（典型：TUN 被系统回收、进程卡死）——
+# 此时保活循环不会重启它（进程没退出），必须强杀让循环重建。
+# 用户反馈"间隔时间长就连不上、要手动重启服务"即此盲区，v1.0.44 修复。
+heal_stale_vpn() {
+    local vp st now diff pid cmd
+    vp=$(cat "${ETC}/vpn.pid" 2>/dev/null)
+    [ -z "$vp" ] && return 0
+    kill -0 "$vp" 2>/dev/null || return 0
+    st=$(stat -c %Y "${ETC}/openvpn-status.log" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    diff=$(( now - st ))
+    [ "$diff" -le 120 ] && return 0
+    mark "HEAL_STALE_STATUS_${diff}s"
+    kill -9 "$vp" 2>/dev/null
+    for p in /proc/[0-9]*; do
+        pid="${p#/proc/}"
+        cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
+        case "$cmd" in
+            */bin/openvpn\ --config*)
+                [ "$pid" != "$vp" ] && { mark "HEAL_KILL_${pid}"; kill -9 "$pid" 2>/dev/null; }
+                ;;
+        esac
+    done
+}
+
 while kill -0 "${WEBLOOP}" 2>/dev/null && kill -0 "${VPNLOOP}" 2>/dev/null; do
     mark "MAINLOOP_ALIVE"
+    heal_stale_vpn
     sleep 5
 done
 mark "MAINLOOP_FALLTHROUGH"
