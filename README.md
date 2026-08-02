@@ -14,6 +14,12 @@
 - 接入端口 **UDP / TCP 1194**（设置页可随时切换，防火墙已同时放行）
 - Web 管理界面经**统一网关 `/app/openvpn`** 打开（复用 NAS 登录态，不对外暴露独立端口）
 - 数据（证书 / 配置 / 数据库）持久化到应用数据卷，重装或升级不丢失
+<img width="2539" height="1264" alt="210720sm1n6606l0lmludb" src="https://github.com/user-attachments/assets/a3ca73ea-036a-47e7-8fac-1651252e795e" />
+<img width="2539" height="1264" alt="210803dxikkkkkrx0gkizk" src="https://github.com/user-attachments/assets/792afad7-f1b2-491d-887d-bbb39e432115" />
+<img width="2536" height="1109" alt="210818j5sgfncj7spjxcxs" src="https://github.com/user-attachments/assets/142980d6-42d9-487d-b3a5-d9e41c29e1ba" />
+<img width="2545" height="1166" alt="210832c2kkckphfgbd2pno" src="https://github.com/user-attachments/assets/86d82ad4-9ac4-402d-a4fd-3d293f4b6a47" />
+<img width="2541" height="1100" alt="210846o4rci8za8t20ancr" src="https://github.com/user-attachments/assets/e41bbf50-5532-40d2-aaa9-5463cc2d40fa" />
+<img width="2534" height="1100" alt="微信图片_20260802102546_31_20" src="https://github.com/user-attachments/assets/e1a7d10d-241d-482f-be56-7d33e0b5aa86" />
 
 ## 适用前提
 
