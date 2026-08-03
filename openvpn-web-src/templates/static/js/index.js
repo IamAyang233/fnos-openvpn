@@ -174,19 +174,25 @@
     var slice = onlineAll.slice(start, start + ONLINE_PER_PAGE);
     tb.innerHTML = slice.map(function (c) {
       var name = c.commonName || c.username || '—';
-      var vip = c.vip || c.vip6 || '—';
+      var vip = c.vip || '—';
+      var vip6 = c.vip6 || '';
+      var vipCell = vip6 ? '<div class="mono">' + esc(vip) + '</div><div class="mono sub">' + esc(vip6) + '</div>' : '<div class="mono">' + esc(vip) + '</div>';
       var rateStr = fmtRate(c.rateBps);
+      var banned = !!c.isNftBlacklist;
+      var banBtn = banned
+        ? '<button class="icon-btn btn-warn" data-act="ban" data-banned="1" data-vip="' + esc(vip) + '" data-vip6="' + esc(vip6) + '" aria-label="解除拉黑"><svg class="icon icon-sm"><use href="#i-unlock"/></svg></button>'
+        : '<button class="icon-btn btn-danger" data-act="ban" data-banned="0" data-vip="' + esc(vip) + '" data-vip6="' + esc(vip6) + '" aria-label="禁网"><svg class="icon icon-sm"><use href="#i-lock"/></svg></button>';
       return '<tr>' +
         '<td>' + esc(name) + '</td>' +
-        '<td class="mono">' + esc(vip) + '</td>' +
+        '<td>' + vipCell + '</td>' +
         '<td>' + rateStr + '</td>' +
         '<td>' + esc(c.onlineTime || '—') + '</td>' +
         '<td>' + fmtBytes(c.recvBytes) + '</td>' +
         '<td>' + fmtBytes(c.sendBytes) + '</td>' +
         '<td><div class="row-actions" style="justify-content:flex-end">' +
-          '<button class="icon-btn" data-act="kill" data-cid="' + esc(name) + '" aria-label="断开"><svg class="icon icon-sm"><use href="#i-close"/></svg></button>' +
-          '<button class="icon-btn" data-act="limit" data-vip="' + esc(vip) + '" aria-label="限速"><svg class="icon icon-sm"><use href="#i-bolt"/></svg></button>' +
-          '<button class="icon-btn btn-danger" data-act="ban" data-vip="' + esc(vip) + '" aria-label="禁网"><svg class="icon icon-sm"><use href="#i-lock"/></svg></button>' +
+          '<button class="icon-btn" data-act="kill" data-cid="' + esc(c.id || name) + '" aria-label="断开"><svg class="icon icon-sm"><use href="#i-close"/></svg></button>' +
+          '<button class="icon-btn" data-act="limit" data-vip="' + esc(vip) + '" data-vip6="' + esc(vip6) + '" aria-label="限速"><svg class="icon icon-sm"><use href="#i-bolt"/></svg></button>' +
+          banBtn +
         '</div></td></tr>';
     }).join('');
     onlinePage = renderLocalPager('onlinePg', onlinePage, ONLINE_PER_PAGE, onlineAll.length, function (p) { onlinePage = p; renderOnlinePage(); });
@@ -227,7 +233,11 @@
     if (act === 'kill') {
       request.post('/ovpn/kill', { cid: btn.dataset.cid }).then(function () { toast('已断开 ' + btn.dataset.cid); loadDashboard(true); }).catch(function () {});
     } else if (act === 'ban') {
-      request.post('/ovpn/firewall?a=add_blacklist', { vip: btn.dataset.vip }).then(function () { toast('已拉黑 ' + btn.dataset.vip); }).catch(function () {});
+      // 拉黑/解除拉黑 toggle：已拉黑再点一次即解除
+      var banned = btn.dataset.banned === '1';
+      var url = '/ovpn/firewall?a=' + (banned ? 'remove_blacklist' : 'add_blacklist');
+      var label = banned ? '已解除拉黑 ' : '已拉黑 ';
+      request.post(url, { vip: btn.dataset.vip, vip6: btn.dataset.vip6 || '' }).then(function () { toast(label + btn.dataset.vip); loadDashboard(true); }).catch(function () {});
     } else if (act === 'limit') {
       uiPrompt({ title: '限速 (Mbps)', placeholder: '0 表示不限速', validate: function (v) {
         if (v === '') return '请输入数值';
@@ -236,7 +246,9 @@
         return '';
       } }).then(function (v) {
         if (v === null) return;
-        request.post('/ovpn/firewall?a=set_rateLimit', { vip: btn.dataset.vip, rate: v }).then(function () { toast('已限速 ' + btn.dataset.vip); }).catch(function () {});
+        // 后端 set_rateLimit 协议：upload/download + 单位；同时支持 vip6
+        var payload = { vip: btn.dataset.vip, vip6: btn.dataset.vip6 || '', upload: v, download: v, uploadUnit: 'Mbps', downloadUnit: 'Mbps' };
+        request.post('/ovpn/firewall?a=set_rateLimit', payload).then(function () { toast('已限速 ' + btn.dataset.vip); }).catch(function () {});
       });
     }
   });
@@ -330,7 +342,7 @@
     tb.innerHTML = slice.map(function (c) {
       return '<tr>' +
         '<td>' + esc(c.name || '—') + '</td>' +
-        '<td class="mono">' + esc(c.vip || '—') + '</td>' +
+        '<td>' + (c.vip6 ? '<div class="mono">' + esc(c.vip || '—') + '</div><div class="mono sub">' + esc(c.vip6) + '</div>' : '<div class="mono">' + esc(c.vip || '—') + '</div>') + '</td>' +
         '<td>' + (c.online ? '<span class="badge on"><span class="dot"></span>在线</span>' : '<span class="badge off"><span class="dot"></span>离线</span>') + '</td>' +
         '<td>' + esc(c.date || '—') + '</td>' +
         '<td>' + fmtBytes(c.recvBytes) + '</td>' +
@@ -396,12 +408,16 @@
     $('ceName').value = name;
     $('ceNameShow').value = name;
     $('ceIp').value = '';
+    $('ceIp6').value = '';
     $('ceErr').textContent = '';
     $('clientEditModal').hidden = false;
     request.get('/ovpn/client/' + encodeURIComponent(name) + '/ccd', { silent: true }).then(function (d) {
       var content = (d && d.content) || '';
-      var m = /ifconfig-push\s+(\S+)/i.exec(content);
-      if (m) $('ceIp').value = m[1];
+      var m4 = /ifconfig-push\s+(\S+)/i.exec(content);
+      if (m4) $('ceIp').value = m4[1];
+      // IPv6：ifconfig-ipv6-push 接受 IP/CIDR（OpenVPN 2.4+）
+      var m6 = /ifconfig-ipv6-push\s+(\S+)/i.exec(content);
+      if (m6) $('ceIp6').value = m6[1];
     }).catch(function () {});
   }
   function closeClientEdit() { $('clientEditModal').hidden = true; }
@@ -413,11 +429,18 @@
   $('clientEditSave').addEventListener('click', function () {
     var name = $('ceName').value;
     var ip = $('ceIp').value.trim();
-    var content = '';
+    var ip6 = $('ceIp6').value.trim();
+    var lines = [];
     if (ip) {
-      if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) { $('ceErr').textContent = 'IP 格式不正确'; return; }
-      content = 'ifconfig-push ' + ip + ' 255.255.255.0';
+      if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) { $('ceErr').textContent = 'IPv4 格式不正确'; return; }
+      lines.push('ifconfig-push ' + ip + ' 255.255.255.0');
     }
+    if (ip6) {
+      // IPv6 基本格式校验（允许 /CIDR 后缀），避免写入垃圾导致 openvpn 重启失败
+      if (!/^[0-9a-fA-F:]+(\/\d+)?$/.test(ip6)) { $('ceErr').textContent = 'IPv6 格式不正确'; return; }
+      lines.push('ifconfig-ipv6-push ' + ip6);
+    }
+    var content = lines.join('\n') + (lines.length ? '\n' : '');
     request.put('/ovpn/client/' + encodeURIComponent(name) + '/ccd', { content: content })
       .then(function (d) { toast((d && d.message) || '已保存'); closeClientEdit(); loadClients(); })
       .catch(function (e) { $('ceErr').textContent = (e && e.message) || '保存失败'; });
@@ -711,7 +734,7 @@
           '<td class="mono">' + esc(tStr || '—') + '</td>' +
           '<td>' + esc(h.username || '—') + '</td>' +
           '<td>' + esc(h.common_name || '—') + '</td>' +
-          '<td class="mono">' + esc(h.vip || h.vip6 || '—') + '</td>' +
+          '<td>' + (h.vip6 ? '<div class="mono">' + esc(h.vip || '—') + '</div><div class="mono sub">' + esc(h.vip6) + '</div>' : '<div class="mono">' + esc(h.vip || '—') + '</div>') + '</td>' +
           '<td><span class="badge on"><span class="dot"></span>成功</span></td>' +
         '</tr>';
       }).join('');

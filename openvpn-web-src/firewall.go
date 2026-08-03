@@ -77,6 +77,15 @@ func setNftQosChain(chain, ips, rate, unit string) error {
 		return nil
 	}
 
+	// 单位换算：前端/API 语义为 Mbps（兆比特/秒），nft limit 只支持字节单位且必须带时间后缀。
+	// 1 Mbps = 125 kbytes/second（nft v1.0.6 实测：`limit rate 10 mbytes/second` 合法，缺 /second 报 wrong rate format）。
+	// rate=0 表示清除限速（走 delete 分支，不生成规则）。
+	nftRate := "0"
+	if r > 0 {
+		nftRate = strconv.Itoa(r * 125)
+	}
+	nftUnit := "kbytes/second"
+
 	addrField := "daddr"
 	if chain == "upload" {
 		addrField = "saddr"
@@ -85,7 +94,8 @@ func setNftQosChain(chain, ips, rate, unit string) error {
 	for ip := range strings.SplitSeq(ips, ",") {
 		qos := getNftQosChainRule(chain, ip)
 		if qos.Handle == "" && r == 0 {
-			return nil
+			// 该地址本就无限速规则，跳过（不能 return——多地址时后面的可能还有规则要清）
+			continue
 		}
 
 		family := "ip"
@@ -93,12 +103,12 @@ func setNftQosChain(chain, ips, rate, unit string) error {
 			family = "ip6"
 		}
 
-		cmd := exec.Command("nft", "add", "rule", "inet", nftTableName, chain, family, addrField, ip, "limit", "rate", "over", rate, unit, "drop")
+		cmd := exec.Command("nft", "add", "rule", "inet", nftTableName, chain, family, addrField, ip, "limit", "rate", "over", nftRate, nftUnit, "drop")
 		if qos.Handle != "" {
 			if r == 0 {
 				cmd = exec.Command("nft", "delete", "rule", "inet", nftTableName, chain, "handle", qos.Handle)
 			} else {
-				cmd = exec.Command("nft", "replace", "rule", "inet", nftTableName, chain, "handle", qos.Handle, family, addrField, ip, "limit", "rate", "over", rate, unit, "drop")
+				cmd = exec.Command("nft", "replace", "rule", "inet", nftTableName, chain, "handle", qos.Handle, family, addrField, ip, "limit", "rate", "over", nftRate, nftUnit, "drop")
 			}
 		}
 
@@ -622,8 +632,15 @@ func FirewallHandler(c *gin.Context) {
 		switch a {
 		case "add_blacklist":
 			vip := c.PostForm("vip")
+			vip6 := c.PostForm("vip6")
 
-			err := setNftBlackList(vip, "add")
+			// IPv6 支持：拉黑同时作用于 IPv4 + IPv6 地址
+			ips := vip
+			if vip6 != "" {
+				ips = vip + "," + vip6
+			}
+
+			err := setNftBlackList(ips, "add")
 			if err != nil {
 				logger.Error(context.Background(), err.Error())
 				c.JSON(http.StatusInternalServerError, gin.H{"message": "禁网失败"})
@@ -633,8 +650,14 @@ func FirewallHandler(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"message": "禁网成功"})
 		case "remove_blacklist":
 			vip := c.PostForm("vip")
+			vip6 := c.PostForm("vip6")
 
-			err := setNftBlackList(vip, "delete")
+			ips := vip
+			if vip6 != "" {
+				ips = vip + "," + vip6
+			}
+
+			err := setNftBlackList(ips, "delete")
 			if err != nil {
 				logger.Error(context.Background(), err.Error())
 				c.JSON(http.StatusInternalServerError, gin.H{"message": "解除网络限制失败"})
@@ -644,19 +667,26 @@ func FirewallHandler(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"message": "解除网络限制成功"})
 		case "set_rateLimit":
 			vip := c.PostForm("vip")
+			vip6 := c.PostForm("vip6")
 			upload := c.PostForm("upload")
 			uploadUnit := c.PostForm("uploadUnit")
 			download := c.PostForm("download")
 			downloadUnit := c.PostForm("downloadUnit")
 
-			err := setNftQosChain("upload", vip, upload, uploadUnit)
+			// IPv6 支持：限速规则同时作用于 IPv4 + IPv6 地址
+			ips := vip
+			if vip6 != "" {
+				ips = vip + "," + vip6
+			}
+
+			err := setNftQosChain("upload", ips, upload, uploadUnit)
 			if err != nil {
 				logger.Error(context.Background(), err.Error())
 				c.JSON(http.StatusInternalServerError, gin.H{"message": "设置上传速率失败"})
 				return
 			}
 
-			err = setNftQosChain("download", vip, download, downloadUnit)
+			err = setNftQosChain("download", ips, download, downloadUnit)
 			if err != nil {
 				logger.Error(context.Background(), err.Error())
 				c.JSON(http.StatusInternalServerError, gin.H{"message": "设置下载速率失败"})

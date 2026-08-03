@@ -33,6 +33,7 @@
     <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></symbol>
     <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-unlock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.7-2.3"/></symbol>
     <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="8" r="4"/><path d="M11 11l9 9M16 16l2-2M19 19l2-2"/></symbol>
     <symbol id="i-logout" viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/></symbol>
   </defs>
@@ -338,7 +339,8 @@
     <div class="modal-body">
       <input type="hidden" id="ceName" />
       <div class="field"><label>客户端名称</label><input class="input" id="ceNameShow" readonly /></div>
-      <div class="field"><label>静态 IP（固定分配）</label><input class="input" id="ceIp" placeholder="留空则自动分配，例如 10.8.0.5" /></div>
+      <div class="field"><label>静态 IPv4（固定分配）</label><input class="input" id="ceIp" placeholder="留空则自动分配，例如 10.8.0.5" /></div>
+      <div class="field"><label>静态 IPv6（固定分配，需先在「设置」开启 IPv6）</label><input class="input" id="ceIp6" placeholder="留空则自动分配，例如 fdaf:f178:e916:6dd0::5" /></div>
       <div class="err" id="ceErr"></div>
     </div>
     <div class="modal-foot">

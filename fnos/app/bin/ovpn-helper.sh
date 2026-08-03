@@ -47,7 +47,7 @@ init_config() {
 
 	cat <<EOF >"$OVPN_DATA/server.conf"
 port $OVPN_PORT
-proto $OVPN_PROTO
+proto $([[ "$OVPN_IPV6" == "true" ]] && [[ ! "$OVPN_PROTO" =~ 6 ]] && echo "${OVPN_PROTO}6" || echo $OVPN_PROTO)
 dev tun
 persist-key
 persist-tun
@@ -96,6 +96,8 @@ ensure_server() {
 	if [ ! -f "$EASYRSA_PKI/issued/$SERVER_NAME.crt" ]; then
 		easyrsa --batch build-server-full "$SERVER_NAME" nopass
 	fi
+	# 每次启动确保 nft 表存在（限速/拉黑依赖 openvpn-nft 表；表是内存态，重启即失）
+	load_nftconfig
 	init_config
 }
 
@@ -284,6 +286,10 @@ table inet $TABLE {
 	}
 }
 EOF
+	# 幂等加载：nft -f 对已存在的表是「追加规则」语义（不是替换）。
+	# openvpn-web 重启（升级/自愈）时 openvpn 主进程可能未重启、表还在，
+	# 直接 -f 会让 forward 规则翻倍累积（曾实测累积到 48 条）。先删表再加载。
+	nft delete table inet "$TABLE" 2>/dev/null || true
 	nft -f "$NFT_CONFIG"
 }
 

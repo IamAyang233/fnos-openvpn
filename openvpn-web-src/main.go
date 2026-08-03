@@ -73,6 +73,7 @@ type ClientConfigData struct {
 	File      string  `json:"file"`
 	Date      string  `json:"date"`
 	Vip       string  `json:"vip"`
+	Vip6      string  `json:"vip6"`
 	RecvBytes float64 `json:"recvBytes"`
 	SendBytes float64 `json:"sendBytes"`
 	LastSeen  string  `json:"lastSeen"`
@@ -164,7 +165,10 @@ func (ov *ovpn) sendCommand(command string) (string, error) {
 			sb.Write([]byte(str))
 		}
 
-		if err != nil || strings.HasSuffix(sb.String(), "\r\nEND\r\n") || strings.HasPrefix(sb.String(), "SUCCESS:") {
+		s := sb.String()
+		// 响应完成判断：出现 SUCCESS/ERROR 标记，或读到 END 结束行，或连接断开。
+		// 不能用 HasPrefix——TCP 分片时 >INFO 欢迎行可能被拆开，sb 前部会残留残片导致永远不匹配（曾造成 3s 死等超时）。
+		if err != nil || strings.Contains(s, "SUCCESS:") || strings.Contains(s, "ERROR:") || strings.HasSuffix(s, "\r\nEND\r\n") {
 			break
 		}
 	}
@@ -300,8 +304,27 @@ func (ov *ovpn) getServer() ServerData {
 
 }
 
-func (ov *ovpn) killClient(cid string) {
-	ov.sendCommand(fmt.Sprintf("client-kill %s HALT", cid))
+func (ov *ovpn) killClient(cid string) (bool, error) {
+	// 兜底：cid 非数字（旧前端缓存或直连 API 传 common name）→ 从在线客户端查数字 Client ID
+	if _, err := strconv.Atoi(cid); err != nil {
+		for _, c := range ov.getClient() {
+			if c.CommonName == cid {
+				cid = c.ID
+				break
+			}
+		}
+	}
+	data, err := ov.sendCommand(fmt.Sprintf("client-kill %s HALT", cid))
+	if err != nil {
+		return false, err
+	}
+	if strings.Contains(data, "SUCCESS") {
+		return true, nil
+	}
+	if strings.Contains(data, "ERROR") {
+		return false, fmt.Errorf("openvpn 拒绝断开: %s", strings.TrimSpace(strings.TrimPrefix(data, "ERROR: ")))
+	}
+	return false, fmt.Errorf("断开命令未确认（客户端可能已离线）")
 }
 
 // revokedSerials 解析 crl.pem，返回被吊销证书的序列号集合（十进制字符串，与 cert.SerialNumber.String() 对齐）。
@@ -859,6 +882,8 @@ func main() {
 				"ovpn_proto":       viper.GetString("openvpn.ovpn_proto"),
 				"ovpn_subnet":      viper.GetString("openvpn.ovpn_subnet"),
 				"ovpn_max_clients": viper.GetInt("openvpn.ovpn_max_clients"),
+				"ovpn_ipv6":        viper.GetBool("openvpn.ovpn_ipv6"),
+				"ovpn_subnet6":     viper.GetString("openvpn.ovpn_subnet6"),
 			},
 		})
 	})
@@ -1062,7 +1087,15 @@ func main() {
 
 		ovpn.POST("/kill", func(c *gin.Context) {
 			cid := c.PostForm("cid")
-			ov.killClient(cid)
+			ok, err := ov.killClient(cid)
+			if err != nil || !ok {
+				msg := "断开失败"
+				if err != nil {
+					msg = err.Error()
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"message": msg})
+				return
+			}
 			c.JSON(http.StatusOK, gin.H{"code": http.StatusOK})
 		})
 
@@ -1620,6 +1653,7 @@ func main() {
 					clients[i].RecvBytes += c.RecvBytes
 					clients[i].SendBytes += c.SendBytes
 					clients[i].Vip = c.Vip
+					clients[i].Vip6 = c.Vip6
 					clients[i].LastSeen = c.ConnDate
 					clients[i].Online = true
 				}
