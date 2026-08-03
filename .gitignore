@@ -4,12 +4,22 @@
 # 二进制编译产物（Go 编译生成，build.sh 会重新构建）
 fnos/app/bin/openvpn-web
 openvpn-web-src/build_err.txt
+openvpn-web-src/build_arm64*
 
 # 依赖缓存 / 上游源码 / 构建资源 / 测试截图
 .deb_cache/
+.deb_cache_arm64/
 upstream/
 vendor/
 qa_shots/
+
+# ARM 构建产物与临时目录
+build_arm*.sh
+build_arm*.py
+fnos-arm/
+fnos_arm64*/
+.build_arm_*/
+.build_*/
 
 # 临时与日志
 *.tmp

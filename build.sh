@@ -43,13 +43,31 @@ info "编译 openvpn-web（版本 $VERSION）..."
 #   2) 先 rm 掉旧产物再编译，杜绝“写不进/覆盖不了”的静默失败。
 BIN_OUT="$FNOS_DIR/app/bin/openvpn-web"
 rm -f "$BIN_OUT" 2>/dev/null || true
-BIN_OUT_WIN="$(cygpath -w "$BIN_OUT")"
-( cd "$SCRIPT_DIR/openvpn-web-src" && GOFLAGS=-mod=mod GOSUMDB=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags "-X main.version=$VERSION" -o "$BIN_OUT_WIN" . ) || error "go build openvpn-web 失败"
-# 产物校验：必须为 Linux ELF（Windows 交叉编译经典翻车：不带 GOOS 会产出 PE，装回 NAS 卡 start）
-if ! file "$BIN_OUT" 2>/dev/null | grep -q "ELF 64-bit"; then
-    error "openvpn-web 不是 Linux ELF（交叉编译失败），终止打包"
+# cygpath 在某些 Git Bash 环境不可用，用 sed 转原生 Windows 路径（python 不认 /d/ 格式）
+if command -v cygpath >/dev/null 2>&1; then
+    BIN_OUT_WIN="$(cygpath -w "$BIN_OUT")"
+else
+    BIN_OUT_WIN="$(echo "$BIN_OUT" | sed 's|^/\([a-zA-Z]\)/|\1:/|')"
 fi
-info "编译产物校验通过: $(file "$BIN_OUT" | cut -d: -f2 | cut -c1-40)"
+( cd "$SCRIPT_DIR/openvpn-web-src" && GOFLAGS=-mod=mod CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags "-X main.version=$VERSION" -o "$BIN_OUT_WIN" . ) || error "go build openvpn-web 失败"
+# 产物校验：必须为 Linux ELF（Windows 交叉编译经典翻车：不带 GOOS 会产出 PE，装回 NAS 卡 start）
+if command -v file >/dev/null 2>&1; then
+    if ! file "$BIN_OUT" 2>/dev/null | grep -q "ELF 64-bit"; then
+        error "openvpn-web 不是 Linux ELF（交叉编译失败），终止打包"
+    fi
+    info "编译产物校验通过: $(file "$BIN_OUT" | cut -d: -f2 | cut -c1-40)"
+else
+    # file 命令不可用（精简 Git Bash），用 python 检查 ELF magic + 架构
+    BIN_OUT_WIN_CHECK="$(echo "$BIN_OUT" | sed 's|^/\([a-zA-Z]\)/|\1:/|')"
+    if ! python -c "
+import sys
+with open(sys.argv[1],'rb') as f: h=f.read(20)
+if h[:4] != b'\x7fELF': sys.exit(1)
+print('ELF', '64-bit' if h[4]==2 else '32-bit', 'machine=0x%x' % int.from_bytes(h[18:20],'little'))
+" "$BIN_OUT_WIN_CHECK"; then
+        error "openvpn-web 不是 Linux ELF（交叉编译失败），终止打包"
+    fi
+fi
 
 # 2. Create app.tgz
 info "打包 app.tgz ..."
@@ -63,20 +81,62 @@ trap 'rm -rf "$WORK_DIR" 2>/dev/null || :' EXIT
 # 关键：app/ 目录内容【直接映射到 target/】，app.tgz 内不能有多余的 app/ 层级！
 # 旧版打成 ./app/bin、./app/ui → 安装后 target/app/ui/config，fnOS 找不到入口 → isOpen=false。
 # 修正后 app.tgz 顶层为 ./bin、./lib、./ui → target/bin、target/lib、target/ui。
-( cd "$FNOS_DIR/app" && tar -cf "$WORK_DIR/app.tar" --mode=0755 ./bin )
-( cd "$FNOS_DIR/app" && tar -rf "$WORK_DIR/app.tar" --mode=0644 --exclude=./bin ./lib )
-# 桌面入口 ui：放进 app.tgz 顶层（target/ui），同时 service_postinst 会 symlink 到 /var/apps/{app}/ui
-mkdir -p "$WORK_DIR/ui/images"
-cp -af "$FNOS_DIR/ui/config"     "$WORK_DIR/ui/config"
-cp -af "$FNOS_DIR/ui/index.html" "$WORK_DIR/ui/index.html" 2>/dev/null || true
-cp -af "$FNOS_DIR/ui/images/."   "$WORK_DIR/ui/images/"
-# 入口图标按 {0} 占位符命名（fnOS 桌面图标约定：icon_64.png / icon_256.png）
-[ -f "$FNOS_DIR/ICON.PNG" ]     && cp "$FNOS_DIR/ICON.PNG"     "$WORK_DIR/ui/images/icon_64.png"
-[ -f "$FNOS_DIR/ICON_256.PNG" ] && cp "$FNOS_DIR/ICON_256.PNG" "$WORK_DIR/ui/images/icon_256.png"
-( cd "$WORK_DIR" && tar -rf "$WORK_DIR/app.tar" --mode=0644 ./ui )
-gzip -c "$WORK_DIR/app.tar" > "$WORK_DIR/app.tgz"
+# 用 python tarfile 打包 app.tgz（bsdtar 不支持 GNU --mode，权限可控）
+info "用 python 打包 app.tgz ..."
+# MSYS /d/... 路径 → Windows 原生路径（python 不认 /d/ 格式）
+WIN_WORK="$(echo "$WORK_DIR" | sed 's|^/\([a-zA-Z]\)/|\1:/|')"
+WIN_FNOS="$(echo "$FNOS_DIR" | sed 's|^/\([a-zA-Z]\)/|\1:/|')"
+python - "$WIN_WORK" "$WIN_FNOS" << 'PY_PACK'
+import sys, os, gzip, tarfile, hashlib
+work, fnos = sys.argv[1], sys.argv[2]
+app_dir = os.path.join(fnos, 'app')
+
+def add_tree(tf, base, mode):
+    for dp, _, fs in os.walk(base):
+        for f in fs:
+            src = os.path.join(dp, f)
+            rel = os.path.relpath(src, app_dir).replace(os.sep, '/')
+            ti = tf.gettarinfo(src, rel)
+            ti.mode = mode; ti.uid = ti.gid = 0; ti.uname = ti.gname = ''
+            with open(src, 'rb') as fh: tf.addfile(ti, fh)
+
+# 直接写 gzip 压缩的 app.tgz
+with gzip.open(os.path.join(work, 'app.tgz'), 'wb') as gz:
+    with tarfile.open(fileobj=gz, mode='w') as tf:
+        add_tree(tf, os.path.join(app_dir, 'bin'), 0o755)
+        lib_dir = os.path.join(app_dir, 'lib')
+        if os.path.isdir(lib_dir):
+            add_tree(tf, lib_dir, 0o644)
+        # ui 目录（桌面入口）：复制图标后打包
+        ui_dir = os.path.join(fnos, 'ui')
+        work_ui = os.path.join(work, 'ui')
+        if os.path.isdir(ui_dir):
+            import shutil
+            if os.path.isdir(work_ui):
+                shutil.rmtree(work_ui)
+            shutil.copytree(ui_dir, work_ui)
+            # 入口图标按 {0} 占位符命名（fnOS 桌面图标约定：icon_64.png / icon_256.png）
+            for src_name, dst_name in [('ICON.PNG', 'icon_64.png'), ('ICON_256.PNG', 'icon_256.png')]:
+                s = os.path.join(fnos, src_name)
+                if os.path.isfile(s):
+                    img_dir = os.path.join(work_ui, 'images')
+                    os.makedirs(img_dir, exist_ok=True)
+                    shutil.copy2(s, os.path.join(img_dir, dst_name))
+            for dp, _, fs in os.walk(work_ui):
+                for f in fs:
+                    src = os.path.join(dp, f)
+                    rel = 'ui/' + os.path.relpath(src, work_ui).replace(os.sep, '/')
+                    ti = tf.gettarinfo(src, rel)
+                    ti.mode = 0o644; ti.uid = ti.gid = 0; ti.uname = ti.gname = ''
+                    with open(src, 'rb') as fh: tf.addfile(ti, fh)
+print('[python] app.tgz done')
+PY_PACK
+# 标记 app.tgz 已由 python 生成，跳过后续 tar/gzip 步骤
 APP_TGZ="$WORK_DIR/app.tgz"
-CHECKSUM=$(md5sum "$APP_TGZ" 2>/dev/null | cut -d' ' -f1 || md5 -q "$APP_TGZ")
+if [ ! -f "$APP_TGZ" ]; then
+    error "app.tgz 生成失败"
+fi
+CHECKSUM=$(python -c "import hashlib,sys;print(hashlib.md5(open(sys.argv[1],'rb').read()).hexdigest())" "$(echo "$APP_TGZ" | sed 's|^/\([a-zA-Z]\)/|\1:/|')")
 
 # 3. Assemble fpk
 info "组装 fpk ..."
@@ -175,7 +235,13 @@ done
 
 # Overlay app-specific cmd/
 cp "$FNOS_DIR"/cmd/* "$PKG_DIR/cmd/" 2>/dev/null || true
-chmod +x "$PKG_DIR/cmd/"*
+chmod +x "$PKG_DIR/cmd/"* 2>/dev/null || python - "$(echo "$PKG_DIR" | sed 's|^/\([a-zA-Z]\)/|\1:/|')" << 'PY_CHMOD'
+import os, sys
+cmd_dir = os.path.join(sys.argv[1], 'cmd')
+for f in os.listdir(cmd_dir):
+    os.chmod(os.path.join(cmd_dir, f), 0o755)
+print('[python] chmod done')
+PY_CHMOD
 
 # Copy remaining files
 cp -af "$FNOS_DIR/config" "$PKG_DIR/"
@@ -188,18 +254,71 @@ cp -f "$FNOS_DIR/ICON_256.PNG" "$PKG_DIR/ICON.png" 2>/dev/null || true
 # 桌面入口 ui 已打进 app.tgz 的 app/ui/，fpk 顶层不再放 ui 目录
 # （顶层 ui/ 不会被 fnOS 识别为入口，详见上方 app.tgz 段落）
 cp "$FNOS_DIR/manifest" "$PKG_DIR/manifest"
-sed -i.tmp "s/^checksum.*/checksum        = ${CHECKSUM}/" "$PKG_DIR/manifest"
+sed -i.tmp "s/^checksum.*/checksum        = ${CHECKSUM}/" "$PKG_DIR/manifest" 2>/dev/null || python - "$(echo "$PKG_DIR" | sed 's|^/\([a-zA-Z]\)/|\1:/|')" "$CHECKSUM" << 'PY_MF'
+import os, re, sys
+pkg_dir, checksum = sys.argv[1], sys.argv[2]
+mf = os.path.join(pkg_dir, 'manifest')
+content = open(mf, encoding='utf-8').read()
+content = re.sub(r'(?m)^checksum\s*=.*$', f'checksum        = {checksum}', content)
+open(mf, 'w', encoding='utf-8', newline='\n').write(content)
+print('[python] checksum written')
+PY_MF
+# 清理 sed 可能残留的临时文件
 rm -f "$PKG_DIR/manifest.tmp" 2>/dev/null || true
+rm -f "$PKG_DIR/manifest"*tmp* 2>/dev/null || true
+python - "$(echo "$PKG_DIR" | sed 's|^/\([a-zA-Z]\)/|\1:/|')" << 'PY_CLEAN'
+import os, sys
+pkg_dir = sys.argv[1]
+for f in os.listdir(pkg_dir):
+    if 'tmp' in f.lower() and f != 'app.tgz':
+        try: os.remove(os.path.join(pkg_dir, f)); print('清理:', f)
+        except: pass
+PY_CLEAN
 
 # 4. Package
 FPK_NAME="${APPNAME}_${VERSION}_${PLATFORM:-x86}.fpk"
 info "打包 -> $FPK_NAME ..."
 cd "$PKG_DIR"
-tar -cf "$WORK_DIR/pkg.tar" *
+# 用 python 打包 fpk（tar + gzip，避免 bsdtar 的 MSYS 路径问题）
 # fnOS 首页图标需精确命名为 ICON.png（小写）。Windows 大小写不敏感，
-# 磁盘上 ICON.png 会被视作 ICON.PNG，故用 tar 显式以 ICON.png 名义追加一份。
-tar -rf "$WORK_DIR/pkg.tar" ICON.png 2>/dev/null || true
-gzip -c "$WORK_DIR/pkg.tar" > "$SCRIPT_DIR/$FPK_NAME"
+# 磁盘上 ICON.png 会被视作 ICON.PNG，故 python 打包时显式以 ICON.png 名义追加一份。
+python - "$(echo "$PKG_DIR" | sed 's|^/\([a-zA-Z]\)/|\1:/|')" "$(echo "$SCRIPT_DIR" | sed 's|^/\([a-zA-Z]\)/|\1:/|')" "$FPK_NAME" << 'PY_PKG'
+import os, sys, tarfile, gzip
+pkg_dir, script_dir, fpk_name = sys.argv[1], sys.argv[2], sys.argv[3]
+out = os.path.join(script_dir, fpk_name)
+
+# 收集 package 目录所有文件（含 cmd/ 权限 0755）
+entries = []
+for name in sorted(os.listdir(pkg_dir)):
+    src = os.path.join(pkg_dir, name)
+    if os.path.isdir(src):
+        for dp, _, fs in os.walk(src):
+            for f in fs:
+                fsrc = os.path.join(dp, f)
+                rel = os.path.relpath(fsrc, pkg_dir).replace(os.sep, '/')
+                entries.append((fsrc, rel))
+    else:
+        entries.append((src, name))
+
+with gzip.open(out, 'wb') as gz:
+    with tarfile.open(fileobj=gz, mode='w') as tf:
+        for fsrc, rel in entries:
+            ti = tf.gettarinfo(fsrc, rel)
+            ti.uid = ti.gid = 0; ti.uname = ti.gname = ''
+            # cmd/ 下的脚本可执行
+            ti.mode = 0o755 if rel.startswith('cmd/') else 0o644
+            with open(fsrc, 'rb') as fh:
+                tf.addfile(ti, fh)
+        # 追加 ICON.png（小写，显式名义）
+        icon_src = os.path.join(pkg_dir, 'ICON_256.PNG')
+        if os.path.isfile(icon_src):
+            ti = tf.gettarinfo(icon_src, 'ICON.png')
+            ti.uid = ti.gid = 0; ti.uname = ti.gname = ''
+            ti.mode = 0o644
+            with open(icon_src, 'rb') as fh:
+                tf.addfile(ti, fh)
+print('[python] fpk package done')
+PY_PKG
 cd "$SCRIPT_DIR"
-info "完成: $FPK_NAME ($(du -h "$FPK_NAME" | cut -f1))"
+info "完成: $FPK_NAME ($(python -c "import os;print('%.1f MB' % (os.path.getsize('$FPK_NAME')/1048576))"))"
 info "安装: 飞牛OS → 应用中心 → 手动安装 → 选择 $FPK_NAME"
