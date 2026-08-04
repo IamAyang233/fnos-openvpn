@@ -22,7 +22,10 @@ import (
 type User struct {
 	ID           uint       `gorm:"primarykey" json:"id" form:"id" uri:"id"`
 	Username     string     `gorm:"uniqueIndex;column:username" json:"username" form:"username"`
-	Password     string     `form:"password" json:"password"`
+	// 密码绝不下发前端：AfterFind 会解密为明文用于 Login 对比，但任何 JSON 序列化
+	// （/ovpn/group/:id/users、/ovpn/user、/ovpn/user/:id 等）都不允许带出。
+	// form:"password" 保留，保证登录/创建/导入仍能通过表单绑定接收密码。
+	Password     string     `form:"password" json:"-"`
 	IsEnable     bool       `gorm:"default:true" form:"isEnable" json:"isEnable"`
 	Name         string     `json:"name" form:"name"`
 	Email        string     `json:"email" form:"email"`

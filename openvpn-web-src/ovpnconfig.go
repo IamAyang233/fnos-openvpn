@@ -229,6 +229,15 @@ func (cfg *VPNConfig) Update(key string, val string) {
 			cfg.Delete(fmt.Sprintf(`push "dhcp-option DNS %s"`, viper.GetString("openvpn.ovpn_push_dns2")))
 			cfg.Delete(`push "redirect-gateway def1 ipv6 bypass-dhcp"`)
 		}
+		// 网关模式开关触发时同步 NAT（MASQUERADE）与 IP 转发，保证热更新后即可用；
+		// 关闭时清理 NAT。重启场景由 ovpn-helper.sh ensure_nat 兜底。
+		cmd := exec.Command(ovpnHelper, "ensure_nat")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			if len(out) == 0 {
+				out = []byte(err.Error())
+			}
+			logger.Error(context.Background(), "ensure_nat: "+string(out))
+		}
 	case "openvpn.ovpn_management":
 		cfg.Set("management", strings.ReplaceAll(val, ":", " "))
 	case "openvpn.ovpn_ipv6":
@@ -239,11 +248,9 @@ func (cfg *VPNConfig) Update(key string, val string) {
 		}
 
 		if val == "true" {
-			proto := conf.Openvpn.OvpnProto
-			if !strings.HasSuffix(proto, "6") {
-				proto = fmt.Sprintf("%s6", proto)
-			}
-			cfg.Set("proto", proto)
+			// 服务端 proto 保持原值（tcp/udp 双栈监听 IPv4，server-ipv6 声明 v6 隧道子网）。
+			// 不能改成 tcp6/udp6：openvpn 会只监听 IPv6 地址，IPv4 客户端全部连不上，
+			// 且多数客户端不认 tcp6 标记（报 remote endpoint undefined）。
 			cfg.Set("server-ipv6", conf.Openvpn.OvpnSubnet6)
 
 			getCmd := exec.Command(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", conf.Openvpn.OvpnSubnet6, "-j", "MASQUERADE")

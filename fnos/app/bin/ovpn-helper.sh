@@ -11,7 +11,10 @@ APP_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SYSTEM_CONFIG="$OVPN_DATA/config.json"
 export EASYRSA_PKI="$OVPN_DATA/pki"
 export EASYRSA="$APP_BIN_DIR"
-export PATH="$APP_BIN_DIR:$PATH"
+# PATH 补 /usr/sbin:/sbin：nobody 降权环境默认 PATH 不含系统管理目录，
+# 而 ensure_nat() 依赖 nft/iptables（位于 /usr/sbin、/sbin），缺了会导致
+# "no nft/iptables" 误判 → 网关模式 NAT/FORWARD 规则永远加载不上。
+export PATH="$APP_BIN_DIR:/usr/sbin:/sbin:$PATH"
 
 init_pki() {
 	SERVER_NAME=$(jq -r '.system.base.server_name // ""' "$SYSTEM_CONFIG")
@@ -44,17 +47,20 @@ init_config() {
 	OVPN_SUBNET=$(jq -r '.openvpn.ovpn_subnet // "10.8.0.0/24"' "$SYSTEM_CONFIG")
 	OVPN_SUBNET6=$(jq -r '.openvpn.ovpn_subnet6 // "fdaf:f178:e916:6dd0::/64"' "$SYSTEM_CONFIG")
 	WEB_PORT=$(jq -r '.system.base.web_port // "8833"' "$SYSTEM_CONFIG")
+	# 网关模式推送的 DNS（国内默认，避免 Google DNS 不可达导致"连上但无法上网"）
+	OVPN_DNS1=$(jq -r '.openvpn.ovpn_push_dns1 // "223.5.5.5"' "$SYSTEM_CONFIG")
+	OVPN_DNS2=$(jq -r '.openvpn.ovpn_push_dns2 // "114.114.114.114"' "$SYSTEM_CONFIG")
 
 	cat <<EOF >"$OVPN_DATA/server.conf"
 port $OVPN_PORT
-proto $([[ "$OVPN_IPV6" == "true" ]] && [[ ! "$OVPN_PROTO" =~ 6 ]] && echo "${OVPN_PROTO}6" || echo $OVPN_PROTO)
+proto $OVPN_PROTO
 dev tun
 persist-key
 persist-tun
 keepalive 10 60
 topology subnet
 $([[ "$OVPN_IPV6" == "true" ]] && echo -e "server $(getsubnet $OVPN_SUBNET)\nserver-ipv6 $OVPN_SUBNET6" || echo "server $(getsubnet $OVPN_SUBNET)")
-$([[ "$OVPN_GATEWAY" == "true" ]] && echo -e 'push "dhcp-option DNS 8.8.8.8"\npush "dhcp-option DNS 2001:4860:4860::8888"\npush "redirect-gateway def1 ipv6 bypass-dhcp"' || echo -e '#push "dhcp-option DNS 8.8.8.8"\n#push "dhcp-option DNS 2001:4860:4860::8888"\n#push "redirect-gateway def1 ipv6 bypass-dhcp"')
+$([[ "$OVPN_GATEWAY" == "true" ]] && echo -e "push \"dhcp-option DNS $OVPN_DNS1\"\npush \"dhcp-option DNS $OVPN_DNS2\"\npush \"redirect-gateway def1 ipv6 bypass-dhcp\"" || echo -e "#push \"dhcp-option DNS $OVPN_DNS1\"\n#push \"dhcp-option DNS $OVPN_DNS2\"\n#push \"redirect-gateway def1 ipv6 bypass-dhcp\"")
 dh none
 tls-groups prime256v1
 tls-crypt $EASYRSA_PKI/tc.key
@@ -98,7 +104,76 @@ ensure_server() {
 	fi
 	# 每次启动确保 nft 表存在（限速/拉黑依赖 openvpn-nft 表；表是内存态，重启即失）
 	load_nftconfig
+	# 网关模式 NAT/IP 转发也是内存态，重启后必须重建
+	ensure_nat
 	init_config
+}
+
+# 网关模式（全局代理）：确保 NAT(MASQUERADE) 与 IP 转发。
+# iptables/nft 规则均为内存态，NAS 重启后全部丢失，故每次启动/开关变更时重建。
+# 双保险：nft 表 + iptables（兼容 fnOS 底层 legacy/nft 两种防火墙），并放行 FORWARD 转发。
+# 关闭网关模式时清理 NAT/放行规则，避免残留转发。
+ensure_nat() {
+	set +e
+	command -v nft >/dev/null 2>&1 && NFT=1 || NFT=0
+	command -v iptables >/dev/null 2>&1 && IPT=1 || IPT=0
+	[ "$NFT" = "0" ] && [ "$IPT" = "0" ] && { echo "ensure_nat: no nft/iptables" >&2; set -e; return 0; }
+	GATEWAY=$(jq -r '.openvpn.ovpn_gateway // "false"' "$SYSTEM_CONFIG")
+	SUBNET=$(jq -r '.openvpn.ovpn_subnet // "10.8.0.0/24"' "$SYSTEM_CONFIG")
+	SUBNET6=$(jq -r '.openvpn.ovpn_subnet6 // ""' "$SYSTEM_CONFIG")
+
+	# 幂等清理：先删后建，避免规则翻倍/残留
+	if [ "$NFT" = "1" ]; then
+		nft delete table ip openvpn-nat 2>/dev/null
+		nft delete table ip6 openvpn-nat 2>/dev/null
+	fi
+	if [ "$IPT" = "1" ]; then
+		iptables -t nat -D POSTROUTING -s "$SUBNET" -j MASQUERADE 2>/dev/null
+		iptables -D FORWARD -s "$SUBNET" -j ACCEPT 2>/dev/null
+		iptables -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+	fi
+
+	if [ "$GATEWAY" = "true" ]; then
+		if [ "$NFT" = "1" ]; then
+			{
+				echo "table ip openvpn-nat {"
+				echo "	chain postrouting {"
+				echo "		type nat hook postrouting priority srcnat; policy accept;"
+				echo "		ip saddr $SUBNET masquerade"
+				echo "	}"
+				echo "}"
+				if [ -n "$SUBNET6" ]; then
+					echo "table ip6 openvpn-nat {"
+					echo "	chain postrouting {"
+					echo "		type nat hook postrouting priority srcnat; policy accept;"
+					echo "		ip6 saddr $SUBNET6 masquerade"
+					echo "	}"
+					echo "}"
+				fi
+			} >"$OVPN_DATA/openvpn-nat.nft"
+			if nft -f "$OVPN_DATA/openvpn-nat.nft"; then
+				echo "ensure_nat: nft NAT loaded for $SUBNET" >&2
+			else
+				echo "ensure_nat: nft load failed" >&2
+			fi
+		fi
+		if [ "$IPT" = "1" ]; then
+			# iptables 双保险（fnOS 防火墙可能走 legacy 链路）
+			iptables -t nat -C POSTROUTING -s "$SUBNET" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s "$SUBNET" -j MASQUERADE
+			# 放行 VPN 子网转发（插最前，绕过系统防火墙 FORWARD drop）
+			iptables -I FORWARD -s "$SUBNET" -j ACCEPT 2>/dev/null
+			iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+			echo "ensure_nat: iptables NAT+FORWARD ok" >&2
+		fi
+		# IP 转发（sysctl 与 /proc 双路兜底，OpenVPN 启动时也会自行开启）
+		echo 1 >/proc/sys/net/ipv4/ip_forward 2>/dev/null
+		sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+		echo 1 >/proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null
+		sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
+	else
+		echo "ensure_nat: gateway off, cleaned" >&2
+	fi
+	set -e
 }
 
 renew_cert() {
@@ -150,7 +225,7 @@ genclient() {
 	mkdir -p "$OVPN_DATA/clients"
 	cat <<EOF >"$OVPN_DATA/clients/$1.ovpn"
 client
-proto $([[ "$OVPN_IPV6" == "true" ]] && [[ ! "$OVPN_PROTO" =~ 6 ]] && echo "${OVPN_PROTO}6" || echo $OVPN_PROTO)
+proto $OVPN_PROTO
 remote ${2:-${SERVER_ADDR:-$([[ "$OVPN_IPV6" == "true" ]] && ip -6 route get 2001:4860:4860::8888 | grep -oP 'src \K\S+' || ip -4 route get 8.8.8.8 | grep -oP 'src \K\S+')}} ${3:-$OVPN_PORT}
 dev tun
 resolv-retry infinite
@@ -307,6 +382,7 @@ case $1 in
 	init_pki
 	init_config
 	load_nftconfig
+	ensure_nat
 	check_config
 	exit 0
 	;;
@@ -327,6 +403,10 @@ case $1 in
 	;;
 "ensure_server")
 	ensure_server
+	exit 0
+	;;
+"ensure_nat")
+	ensure_nat
 	exit 0
 	;;
 "renewcert")

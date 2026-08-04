@@ -146,6 +146,11 @@ for i in $(seq 1 30); do
 done
 mark "CONFIG_WAIT_DONE"
 
+# config.json 生成后再修权限：openvpn-web(viper) 创建文件时强制 0600（root 专属），
+# 而 openvpn-auth 认证钩子以 nobody 运行需读取 token；若 openvpn 先于 web 生成配置
+# 或 viper 重写配置，需在此处兜底 chmod 644（幂等）。
+chmod 644 "${ETC}/config.json" 2>/dev/null || true
+
 if [ ! -f "${ETC}/config.json" ]; then
     mark "REASON_CONFIG_TIMEOUT"
     kill "${WEBLOOP}" 2>/dev/null

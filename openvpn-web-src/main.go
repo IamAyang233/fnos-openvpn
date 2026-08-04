@@ -884,6 +884,7 @@ func main() {
 				"ovpn_max_clients": viper.GetInt("openvpn.ovpn_max_clients"),
 				"ovpn_ipv6":        viper.GetBool("openvpn.ovpn_ipv6"),
 				"ovpn_subnet6":     viper.GetString("openvpn.ovpn_subnet6"),
+				"ovpn_gateway":     viper.GetBool("openvpn.ovpn_gateway"),
 			},
 		})
 	})
@@ -1043,6 +1044,15 @@ func main() {
 				ov.sendCommand("signal SIGHUP")
 				c.JSON(http.StatusOK, gin.H{"message": "更新证书成功"})
 			case "restartSrv":
+				// 完整重启语义：① config.json → server.conf 增量同步（保留手动编辑行）；
+				// ② ensure_nat 重建 NAT/IP 转发（内存态，重启即失）；③ SIGHUP 让 openvpn 加载新配置。
+				upadteOvpnConfig()
+				if out, err := exec.Command(ovpnHelper, "ensure_nat").CombinedOutput(); err != nil {
+					if len(out) == 0 {
+						out = []byte(err.Error())
+					}
+					logger.Error(context.Background(), "ensure_nat: "+string(out))
+				}
 				_, err := ov.sendCommand("signal SIGHUP")
 				if err != nil {
 					logger.Error(context.Background(), err.Error())

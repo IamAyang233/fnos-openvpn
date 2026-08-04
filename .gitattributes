@@ -1,0 +1,16 @@
+# 所有脚本/文本文件强制 LF（Windows autocrlf 会把 LF 转 CRLF，破坏 NAS bash 脚本）
+*.sh text eol=lf
+*.go text eol=lf
+*.js text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.sc text eol=lf
+*.conf text eol=lf
+*.cnf text eol=lf
+*.txt text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+Makefile text eol=lf
+Dockerfile text eol=lf

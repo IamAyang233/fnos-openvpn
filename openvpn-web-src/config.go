@@ -111,7 +111,7 @@ func initConfig() {
 	viper.SetDefault("system.base.server_name", "server_"+genRandomString(16))
 	viper.SetDefault("system.base.admin_username", "admin")
 	viper.SetDefault("system.base.admin_password", string(passwd))
-	viper.SetDefault("system.base.auto_update_ovpn_config", false)
+	viper.SetDefault("system.base.auto_update_ovpn_config", true)
 	viper.SetDefault("system.base.max_duplicate_login", 0)
 	viper.SetDefault("system.base.validate_client_config", false)
 	viper.SetDefault("system.base.history_max_days", 90)
@@ -150,12 +150,17 @@ func initConfig() {
 	viper.SetDefault("openvpn.ovpn_management", "127.0.0.1:7505")
 	viper.SetDefault("openvpn.ovpn_ipv6", false)
 	viper.SetDefault("openvpn.ovpn_subnet6", "fdaf:f178:e916:6dd0::/64")
-	viper.SetDefault("openvpn.ovpn_push_dns1", "8.8.8.8")
-	viper.SetDefault("openvpn.ovpn_push_dns2", "2001:4860:4860::8888")
+	viper.SetDefault("openvpn.ovpn_push_dns1", "223.5.5.5")
+	viper.SetDefault("openvpn.ovpn_push_dns2", "114.114.114.114")
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("json")
-	viper.SetConfigPermissions(0600)
+	// 权限必须 0644：openvpn 数据通道以降权用户 nobody 运行，其认证钩子
+	// openvpn-auth 需要读取 config.json 里的 token 才能调用 /ovpn/login。
+	// 0600（root 专属）会导致 nobody 读不到 → token 为空 → 认证 302 失败。
+	// （config.json 含 admin bcrypt hash，但 fnOS 单用户环境同机可读可接受；
+	//   如需更强隔离可改为 0640 + 把 openvpn 降权用户加入专用组。）
+	viper.SetConfigPermissions(0644)
 	viper.AddConfigPath(ovData)
 
 	viper.SafeWriteConfig()
@@ -177,6 +182,14 @@ func initConfig() {
 
 	if !viper.IsSet("system.base.token") {
 		viper.Set("system.base.token", "ovpntoken"+genRandomString(16))
+		viper.WriteConfig()
+	}
+
+	// 热更新开关：存量安装 config.json 无此字段时补写 true，
+	// 保证「设置保存 → server.conf 增量同步」链路默认可用（网关模式等依赖它）。
+	// 仅当字段缺失（InConfig=false）时写入，尊重用户显式配置。
+	if !viper.InConfig("system.base.auto_update_ovpn_config") {
+		viper.Set("system.base.auto_update_ovpn_config", true)
 		viper.WriteConfig()
 	}
 

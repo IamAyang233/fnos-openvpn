@@ -232,9 +232,16 @@
               <input type="checkbox" id="setIpv6" style="width:16px;height:16px;accent-color:var(--accent,#4f7cff)" />
               IPv6 支持
             </label>
-            <div class="hint">启用后隧道双栈运行，协议将自动切换为 udp6/tcp6，IPv4/IPv6 客户端均可接入。</div>
+            <div class="hint">启用后隧道双栈运行（server-ipv6 + IPv6 NAT），IPv4/IPv6 客户端均可接入；传输协议保持 tcp/udp 不变，兼容所有客户端。</div>
           </div>
           <div class="field"><label>IPv6 子网</label><input class="input" id="setSubnet6" value="" placeholder="fdaf:f178:e916:6dd0::/64" /><div class="hint">客户端 IPv6 地址池（ULA 前缀，通常无需修改）。</div></div>
+          <div class="field">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="setGateway" style="width:16px;height:16px;accent-color:var(--accent,#4f7cff)" />
+              网关模式（全局代理）
+            </label>
+            <div class="hint">开启后客户端所有上网流量（含 DNS）都走 VPN 隧道，出口 IP 变为本服务器公网 IP。关闭则仅虚拟局域网内互通，上网仍走客户端本地网络。</div>
+          </div>
           <hr style="border:none;border-top:1px solid var(--border-2);margin:18px 0" />
           <h3>管理员密码</h3>
           <div class="input-group">

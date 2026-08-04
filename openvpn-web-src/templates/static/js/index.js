@@ -270,6 +270,7 @@
       $('setSubnet').value = ov.ovpn_subnet || '';
       $('setIpv6').checked = !!ov.ovpn_ipv6;
       $('setSubnet6').value = ov.ovpn_subnet6 || '';
+      $('setGateway').checked = !!ov.ovpn_gateway;
     }).catch(function () {});
   }
   $('saveSettings').addEventListener('click', function () {
@@ -279,6 +280,7 @@
     var subnet = $('setSubnet').value.trim();
     var ipv6 = $('setIpv6').checked;
     var subnet6 = $('setSubnet6').value.trim();
+    var gateway = $('setGateway').checked;
     var p1 = $('setPass').value, p2 = $('setPass2').value;
     var payload = {};
     if (addr) payload['system.base.server_addr'] = addr;
@@ -287,6 +289,7 @@
     if (subnet) payload['openvpn.ovpn_subnet'] = subnet;
     payload['openvpn.ovpn_ipv6'] = ipv6;
     if (subnet6) payload['openvpn.ovpn_subnet6'] = subnet6;
+    payload['openvpn.ovpn_gateway'] = gateway;
     if (p1) {
       // 密码策略（v1.0.40）：管理员密码至少 8 位
       if (p1.length < 8) { toast('管理员密码至少 8 位'); return; }
@@ -297,8 +300,8 @@
     if (!keys.length) { toast('没有需要保存的修改'); return; }
     (function next(i) {
       if (i >= keys.length) {
-        // 端口/协议/子网/IPv6 修改需 openvpn 重启才重新生成 server.conf
-        var needRestart = payload['openvpn.ovpn_port'] || payload['openvpn.ovpn_proto'] || payload['openvpn.ovpn_subnet'] || payload['openvpn.ovpn_ipv6'] !== undefined || payload['openvpn.ovpn_subnet6'];
+        // 端口/协议/子网/IPv6/网关模式修改需 openvpn 重启才重新生成 server.conf
+        var needRestart = payload['openvpn.ovpn_port'] || payload['openvpn.ovpn_proto'] || payload['openvpn.ovpn_subnet'] || payload['openvpn.ovpn_ipv6'] !== undefined || payload['openvpn.ovpn_subnet6'] || payload['openvpn.ovpn_gateway'] !== undefined;
         toast(needRestart ? '设置已保存（端口/协议/子网修改需点击「重启服务」生效）' : '设置已保存');
         $('setPass').value = ''; $('setPass2').value = '';
         loadSettings();

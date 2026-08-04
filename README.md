@@ -12,6 +12,7 @@
 - 社区版 OpenVPN（非 Access Server），**无并发连接数限制**
 - 证书由内置 easyrsa 离线生成（CA / 服务端 / 客户端），客户端配置导出即用
 - 接入端口 **UDP / TCP 1194**（设置页可随时切换，防火墙已同时放行）
+- **网关模式（全局代理）**：一键开启后客户端所有上网流量（含 DNS）走 VPN 隧道，出口 IP 变为服务器公网 IP；自动配置 nft/iptables NAT 与 IP 转发（重启后仍生效）
 - Web 管理界面经**统一网关 `/app/openvpn`** 打开（复用 NAS 登录态，不对外暴露独立端口）
 - 数据（证书 / 配置 / 数据库）持久化到应用数据卷，重装或升级不丢失
 <img width="2539" height="1264" alt="210720sm1n6606l0lmludb" src="https://github.com/user-attachments/assets/a3ca73ea-036a-47e7-8fac-1651252e795e" />
