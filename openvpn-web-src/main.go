@@ -846,6 +846,26 @@ func main() {
 			}
 		}
 
+		// 未登录也返回新版管理界面（index.html），由前端 JS 检测 401 后引导登录；
+		// 避免旧版 client.html 在登录前闪一下（老 Bootstrap UI 与新界面风格不一致）。
+		c.HTML(http.StatusOK, "index.html", gin.H{
+			"server":   ov.getServer(),
+			"sysUser":  adminUsername,
+			"ldapAuth": ldapAuth,
+			"version":  "v" + version,
+		})
+	})
+
+	// 客户端状态页（非管理员登录后的 / 原行为，保留兼容路径）
+	r.GET("/client", func(c *gin.Context) {
+		session := sessions.Default(c)
+		if user, ok := session.Get("user").(string); ok {
+			u := User{Username: user}.Info()
+			if u.IsFirstLogin == nil || *u.IsFirstLogin {
+				c.Redirect(302, "/login")
+				return
+			}
+		}
 		c.HTML(http.StatusOK, "client.html", conf.Client)
 	})
 

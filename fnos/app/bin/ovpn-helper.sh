@@ -128,9 +128,23 @@ ensure_nat() {
 		nft delete table ip6 openvpn-nat 2>/dev/null
 	fi
 	if [ "$IPT" = "1" ]; then
-		iptables -t nat -D POSTROUTING -s "$SUBNET" -j MASQUERADE 2>/dev/null
-		iptables -D FORWARD -s "$SUBNET" -j ACCEPT 2>/dev/null
-		iptables -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+		# 清理 openvpn 相关 iptables 规则：
+		#  ① 带 openvpn 注释标记的（v1.0.53+ 新增规则）；
+		#  ② 所有 -s 10.0.0.0/8 私有段规则（OpenVPN 专用段，docker 网桥只用 172.x，
+		#     不会误伤）——覆盖早期无注释的存量规则与改子网后的旧子网残留。
+		iptables -t nat -S POSTROUTING 2>/dev/null | grep -E 'comment.*openvpn|-s 10\.' | while read -r line; do
+			rule="${line#-A POSTROUTING }"
+			iptables -t nat -D POSTROUTING $rule 2>/dev/null
+		done
+		iptables -S FORWARD 2>/dev/null | grep -E 'comment.*openvpn|-s 10\.' | while read -r line; do
+			rule="${line#-A FORWARD }"
+			iptables -D FORWARD $rule 2>/dev/null
+		done
+		# RELATED,ESTABLISHED 放行：仅清带 openvpn 注释的（docker 的在 DOCKER 链，不在此层）
+		iptables -S FORWARD 2>/dev/null | grep 'comment.*openvpn' | grep 'RELATED,ESTABLISHED' | while read -r line; do
+			rule="${line#-A FORWARD }"
+			iptables -D FORWARD $rule 2>/dev/null
+		done
 	fi
 
 	if [ "$GATEWAY" = "true" ]; then
@@ -158,11 +172,13 @@ ensure_nat() {
 			fi
 		fi
 		if [ "$IPT" = "1" ]; then
-			# iptables 双保险（fnOS 防火墙可能走 legacy 链路）
-			iptables -t nat -C POSTROUTING -s "$SUBNET" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s "$SUBNET" -j MASQUERADE
+			# iptables 双保险（fnOS 防火墙可能走 legacy 链路）。
+			# 规则带 -m comment --comment openvpn 标记，ensure_nat 清理时按标记精确删除，
+			# 绝不误伤 docker 网桥的 172.x 规则（改子网后旧规则可被彻底清除）。
+			iptables -t nat -C POSTROUTING -s "$SUBNET" -j MASQUERADE -m comment --comment openvpn 2>/dev/null || iptables -t nat -A POSTROUTING -s "$SUBNET" -j MASQUERADE -m comment --comment openvpn
 			# 放行 VPN 子网转发（插最前，绕过系统防火墙 FORWARD drop）
-			iptables -I FORWARD -s "$SUBNET" -j ACCEPT 2>/dev/null
-			iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+			iptables -I FORWARD -s "$SUBNET" -j ACCEPT -m comment --comment openvpn 2>/dev/null
+			iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT -m comment --comment openvpn 2>/dev/null
 			echo "ensure_nat: iptables NAT+FORWARD ok" >&2
 		fi
 		# IP 转发（sysctl 与 /proc 双路兜底，OpenVPN 启动时也会自行开启）

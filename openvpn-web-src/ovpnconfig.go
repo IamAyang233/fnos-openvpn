@@ -313,6 +313,16 @@ func (cfg *VPNConfig) Update(key string, val string) {
 					logger.Error(context.Background(), string(out))
 				}
 			}
+
+			// 同步 nft ip6 表（ip6 openvpn-nat）：ip6tables 与 nft 是两套链路，
+			// 当前网关模式实际依赖 nft 表，只改 ip6tables 会导致 nft 残留旧子网、
+			// IPv6 隧道流量 MASQUERADE 失效。ensure_nat 会整表重建（删旧建新）。
+			if out, err := exec.Command(ovpnHelper, "ensure_nat").CombinedOutput(); err != nil {
+				if len(out) == 0 {
+					out = []byte(err.Error())
+				}
+				logger.Error(context.Background(), "ensure_nat: "+string(out))
+			}
 		}
 	case "openvpn.ovpn_push_dns1":
 		var dnsIndices []int

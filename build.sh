@@ -4,6 +4,21 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FNOS_DIR="${FNOS_DIR:-$SCRIPT_DIR/fnos}"
 
+# Go 工具链版本锁定：go.mod 声明 go 1.25.4，本机若装了更高版本 Go（如 1.26+）
+# 会因 std 包内部结构变化报 "package ... is not in std" 编译失败。
+# 优先直接用已下载的 toolchain 二进制（GOMODCACHE 下），避免 GOTOOLCHAIN
+# 自动下载逻辑在国内网络卡死（proxy.golang.org 被墙）。
+TC_BIN="${HOME}/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.4.windows-amd64/bin"
+if [ -x "${TC_BIN}/go.exe" ] || [ -x "${TC_BIN}/go" ]; then
+    # GOROOT 必须用 Windows 原生路径（go 工具不认 /c/ MSYS 格式）
+    TC_ROOT_WIN="$(echo "${HOME}/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.4.windows-amd64" | sed 's|^/\([a-zA-Z]\)/|\1:/|')"
+    export GOROOT="${TC_ROOT_WIN}"
+    export PATH="${TC_BIN}:${PATH}"
+    echo "[INFO] 使用本地 Go toolchain 1.25.4 (GOROOT=${TC_ROOT_WIN})"
+else
+    export GOTOOLCHAIN=go1.25.4
+fi
+
 # 工具检测：打包不强制依赖 python3（非所有人都有）。
 #  - GNU tar（Linux/macOS 标准环境）：tar 打包 + md5sum + stat，零 python 依赖；
 #  - 无 GNU tar（如精简 Git Bash 的 bsdtar，不支持 --mode 控制权限）：python 兜底。
@@ -52,6 +67,8 @@ info "应用: $APPNAME  版本: $VERSION  平台: ${PLATFORM:-x86}"
 # 1.5 编译 openvpn-web 二进制（注入版本号，与 manifest 对齐；不再依赖手动预编译）
 # 注意：go:embed 的文件变更在某些 Go 版本下不会被构建缓存感知，导致嵌入仍是旧内容。
 # 故这里先 go clean -cache 再 -a 全量重编，保证前端/模板改动 100% 进二进制。
+# SKIP_BUILD=1 时跳过编译（二进制已手动就绪，如 toolchain 环境异常时的应急路径）。
+if [ -z "${SKIP_BUILD:-}" ]; then
 info "清理构建缓存..."
 go clean -cache 2>/dev/null || true
 info "编译 openvpn-web（版本 $VERSION）..."
@@ -94,6 +111,7 @@ print('ELF', '64-bit' if h[4]==2 else '32-bit', 'machine=0x%x' % int.from_bytes(
         error "openvpn-web 不是 Linux ELF（交叉编译失败），终止打包"
     fi
 fi
+fi  # SKIP_BUILD
 
 # 2. Create app.tgz
 info "打包 app.tgz ..."
@@ -227,7 +245,7 @@ sync_var_folder() { if [ -d ${TRIM_APPDEST}/var -a "$(ls -A ${TRIM_APPDEST}/var 
 install_init()      { log_step "install_init"; call_func "validate_preinst" install_log; call_func "service_preinst" install_log; exit 0; }
 install_callback()  { log_step "install_callback"; call_func "save_wizard_variables" install_log; sync_var_folder; call_func "service_postinst" install_log; exit 0; }
 uninstall_init()    { log_step "uninstall_init"; stop_daemon; call_func "service_preuninst" install_log; exit 0; }
-uninstall_callback(){ log_step "uninstall_callback"; call_func "service_postuninst" install_log; if [ "$wizard_delete_data" = "true" ]; then echo "Removing files..." | install_log; [ "$(ls -A ${TRIM_PKGHOME} 2>/dev/null)" != "" ] && find ${TRIM_PKGHOME} -mindepth 1 -delete -print | install_log; [ "$(ls -A ${TRIM_PKGVAR} 2>/dev/null)" != "" ] && find ${TRIM_PKGVAR} -mindepth 1 -delete -print | install_log; fi; exit 0; }
+uninstall_callback(){ log_step "uninstall_callback"; call_func "service_postuninst" install_log; if [ "$wizard_delete_data" = "yes" ]; then echo "Removing files..." | install_log; [ "$(ls -A ${TRIM_PKGHOME} 2>/dev/null)" != "" ] && find ${TRIM_PKGHOME} -mindepth 1 -delete -print | install_log; [ "$(ls -A ${TRIM_PKGVAR} 2>/dev/null)" != "" ] && find ${TRIM_PKGVAR} -mindepth 1 -delete -print | install_log; fi; exit 0; }
 upgrade_init()      { log_step "upgrade_init"; call_func "validate_preupgrade" install_log; stop_daemon; call_func "service_preupgrade" install_log; call_func "service_save" install_log; exit 0; }
 fix_data_ownership() { if [ -n "${TRIM_USERNAME}" ] && [ -n "${TRIM_GROUPNAME}" ]; then local owner="${TRIM_USERNAME}:${TRIM_GROUPNAME}"; for dir in "${TRIM_PKGVAR}" "${TRIM_PKGETC}" "${TRIM_PKGHOME}"; do [ -d "$dir" ] && chown -R "$owner" "$dir" 2>/dev/null || true; done; fi; }
 upgrade_callback()  { log_step "upgrade_callback"; call_func "fix_data_ownership" install_log; call_func "service_restore" install_log; call_func "service_postupgrade" install_log; exit 0; }
@@ -300,7 +318,8 @@ fi
 # 桌面入口 ui 已打进 app.tgz 的 app/ui/，fpk 顶层不再放 ui 目录
 # （顶层 ui/ 不会被 fnOS 识别为入口，详见上方 app.tgz 段落）
 cp "$FNOS_DIR/manifest" "$PKG_DIR/manifest"
-sed -i.tmp "s/^checksum.*/checksum        = ${CHECKSUM}/" "$PKG_DIR/manifest" 2>/dev/null || "$PY_CMD" - "$(winpath "$PKG_DIR")" "$CHECKSUM" << 'PY_MF'
+# 统一用 python 写 checksum（避免 sed -i.tmp 在部分环境残留 manifest.tmp 进包）
+"$PY_CMD" - "$(winpath "$PKG_DIR")" "$CHECKSUM" << 'PY_MF'
 import os, re, sys
 pkg_dir, checksum = sys.argv[1], sys.argv[2]
 mf = os.path.join(pkg_dir, 'manifest')

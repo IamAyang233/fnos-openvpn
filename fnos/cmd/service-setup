@@ -80,7 +80,8 @@ service_preuninst() {
 }
 
 service_postuninst() {
-    if [ "${wizard_delete_data}" = "true" ]; then
+    # 卸载向导 wizard/uninstall 收集 wizard_delete_data（yes=删除 / no=保留，默认 no）
+    if [ "${wizard_delete_data}" = "yes" ]; then
         rm -rf "${ETC}" 2>/dev/null || true
         install_log "已删除应用数据（证书/配置/数据库）"
     else

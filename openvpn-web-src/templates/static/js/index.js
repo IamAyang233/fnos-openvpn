@@ -819,16 +819,20 @@
   $('wizardBtn').addEventListener('click', openWizard);
 
   /* ---------- 初始化 ---------- */
-  initWizard();
-  loadSettings();
-  showPanel('dashboard');
-  // 未初始化则自动弹向导
+  // 先鉴权再渲染：未登录（401）立即跳登录页，避免管理界面骨架闪一下（旧 client.html 的闪烁即由此类时序引起）
   request.get('/api/bootstrap', { silent: true }).then(function (boot) {
+    document.body.classList.remove('boot'); // 鉴权通过，显示管理界面
+    initWizard();
+    loadSettings();
+    showPanel('dashboard');
     if (boot && !boot.init_done) openWizard();
-  }).catch(function () {});
-  // 仪表盘每 5 秒静默刷新
-  setInterval(function () {
-    var dash = document.querySelector('[data-panel="dashboard"]');
-    if (dash && !dash.hidden) loadDashboard(true);
-  }, 5000);
+    // 仪表盘每 5 秒静默刷新
+    setInterval(function () {
+      var dash = document.querySelector('[data-panel="dashboard"]');
+      if (dash && !dash.hidden) loadDashboard(true);
+    }, 5000);
+  }).catch(function (e) {
+    // request 封装内 401 已跳转 /login；此处兜底（如 fetch 异常）
+    if (location.pathname.indexOf('/login') === -1) location.href = BASE + '/login';
+  });
 })();
