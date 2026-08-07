@@ -319,6 +319,81 @@
     request.post('/ovpn/server', { action: 'restartSrv' }).then(function () { toast('已发送重启指令'); }).catch(function () {});
   });
 
+  /* ---------- 关于（更新检测 / Bug 反馈）---------- */
+  function esc2(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (m) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m];
+    });
+  }
+  function checkUpdate(silent) {
+    var btn = $('checkUpdateBtn'), st = $('updateStatus');
+    if (btn) btn.disabled = true;
+    if (st) st.textContent = '检查中…';
+    request.get('/ovpn/update', { silent: !!silent }).then(function (d) {
+      if (!d || d.ok === false) { if (st) st.textContent = (d && d.error) || '检查失败'; return; }
+      // 版本号从 version 提取；数据由 panda 后台「推送更新」页人工录入
+      function pickVer(s) { var m = String(s || '').match(/(\d+\.\d+\.\d+)/); return m ? m[1] : ''; }
+      function cmpVer(a, b) {
+        var pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+        for (var i = 0; i < 3; i++) { var x = pa[i] || 0, y = pb[i] || 0; if (x !== y) return x - y; }
+        return 0;
+      }
+      var rels = (d.releases || []).filter(function (r) { return r.version; });
+      var latest = rels[0] || null;
+      var cur = pickVer(d.current), lat = pickVer(latest && latest.version);
+      var hasNew = !!(cur && lat && cmpVer(lat, cur) > 0);
+      if (st) st.textContent = lat ? (hasNew ? '发现新版本 v' + lat + '！' : '已是最新版本') : '暂无版本信息';
+      var res = $('updateResult');
+      if (res) {
+        res.hidden = false;
+        if (!latest) { res.innerHTML = '<div class="hint">暂无发布版本。</div>'; }
+        else if (hasNew) {
+          var dl = latest.download_url ? ' <a href="' + esc2(latest.download_url) + '" target="_blank" rel="noopener" style="color:var(--accent,#4f7cff);font-weight:600">下载</a>' : '';
+          res.innerHTML = '<div class="alert" style="padding:10px 12px"><b>发现新版本 v' + esc2(lat) + '</b>（' + esc2((latest.pub_date || '').slice(0, 10)) + '）—— 请到飞牛「应用中心」手动升级安装。' + dl + '</div>';
+        } else {
+          res.innerHTML = '<div class="hint">当前已是最新版本 v' + esc2(cur) + '（' + esc2((latest.pub_date || '').slice(0, 10)) + ' 发布）。</div>';
+        }
+      }
+      var chg = $('changelogList');
+      if (chg) {
+        chg.innerHTML = rels.length ? rels.map(function (r) {
+          var content = esc2(r.content || (r.title ? '（' + r.title + '）' : '（无说明）')).replace(/\n/g, '<br>');
+          var ttl = r.title ? '<div style="margin-top:2px;font-weight:600">' + esc2(r.title) + '</div>' : '';
+          return '<div style="padding:8px 0;border-bottom:1px solid var(--border,#e5e7eb)"><b>v' + esc2(r.version) + '</b> <span class="hint">' + esc2((r.pub_date || '').slice(0, 10)) + '</span>' + ttl + '<div style="margin-top:4px;font-size:13px;line-height:1.6">' + content + '</div></div>';
+        }).join('') : '暂无版本记录（由 PanDa 后台「推送更新」页录入）。';
+      }
+    }).catch(function (e) {
+      if (st) st.textContent = '检查失败：' + ((e && e.message) || '未知错误');
+    }).then(function () { if (btn) btn.disabled = false; });
+  }
+  function submitFeedback() {
+    var t = $('fbTitle'), d = $('fbDesc'), c = $('fbContact'), cat = $('fbCategory'), lg = $('fbLogs'), err = $('fbErr');
+    var title = (t && t.value || '').trim();
+    if (!title) { if (err) err.textContent = '请填写反馈标题'; return; }
+    if (err) err.textContent = '';
+    var btn = $('fbSubmit'); if (btn) btn.disabled = true;
+    request.post('/ovpn/feedback', {
+      category: cat ? cat.value : '', title: title,
+      description: d ? d.value : '', contact: c ? c.value : '',
+      include_logs: lg && lg.checked ? 'true' : 'false'
+    }).then(function (r) {
+      toast((r && r.message) || '反馈已提交，感谢！');
+      if (t) t.value = ''; if (d) d.value = ''; if (c) c.value = '';
+    }).catch(function (e) {
+      if (err) err.textContent = (e && e.message) || '提交失败，请重试';
+    }).then(function () { if (btn) btn.disabled = false; });
+  }
+  var checkBtn = $('checkUpdateBtn');
+  if (checkBtn) checkBtn.addEventListener('click', function () { checkUpdate(false); });
+  var fbBtn = $('fbSubmit');
+  if (fbBtn) fbBtn.addEventListener('click', submitFeedback);
+  // 进入关于页自动检查一次（静默）
+  document.querySelectorAll('.nav-item').forEach(function (a) {
+    a.addEventListener('click', function () {
+      if (a.dataset.screen === 'about') checkUpdate(true);
+    });
+  });
+
   /* ---------- 客户端 ---------- */
   function downloadClient(name) {
     request.get('/ovpn/client/' + encodeURIComponent(name) + '/config').then(function (cfg) {
@@ -779,9 +854,10 @@
     }
     function s2() {
       var addr = $('wizAddr').value.trim(), port = $('wizPort').value.trim() || '1194', proto = $('wizProto').value;
+      var ipv6 = $('wizIpv6').checked, gateway = $('wizGateway').checked;
       if (!addr) { err(2, '请填写服务器对外 IP 或域名'); return; }
       err(2, '');
-      request.post('/settings', { 'system.base.server_addr': addr, 'openvpn.ovpn_port': port, 'openvpn.ovpn_proto': proto })
+      request.post('/settings', { 'system.base.server_addr': addr, 'openvpn.ovpn_port': port, 'openvpn.ovpn_proto': proto, 'openvpn.ovpn_ipv6': ipv6, 'openvpn.ovpn_gateway': gateway })
         .then(function () { state.addr = addr; state.port = port; state.proto = proto; step = 3; render(); }).catch(function (e) { err(2, (e && e.message) || '保存失败'); });
     }
     function s3() {
@@ -807,7 +883,14 @@
         }).catch(function (e) { err(4, (e && e.message) || '生成失败'); $('wizGen').disabled = false; });
     }
     function finish() {
-      request.post('/settings', { 'system.base.init_done': true }).then(function () { closeWizard(); toast('初始化完成'); }).catch(function (e) { toast((e && e.message) || '完成失败'); });
+      request.post('/settings', { 'system.base.init_done': true })
+        .then(function () {
+          // 向导完成自动重启服务：让第 2 步保存的协议/端口/IPv6/网关配置同步到 server.conf 并真正生效
+          // （restartSrv = config.json→server.conf 增量同步 + ensure_nat + SIGHUP 重载）
+          return request.post('/ovpn/server', { action: 'restartSrv' });
+        })
+        .then(function () { closeWizard(); toast('初始化完成，服务已重启生效'); })
+        .catch(function (e) { closeWizard(); toast('初始化完成（服务重启失败：' + ((e && e.message) || '未知错误') + '，可到设置页手动重启）'); });
     }
     $('wizNext').onclick = function () { if (step === 1) s1(); else if (step === 2) s2(); else if (step === 3) s3(); };
     $('wizPrev').onclick = function () { if (step > 1) { step--; render(); } };

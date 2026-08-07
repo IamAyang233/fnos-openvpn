@@ -20,6 +20,8 @@
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
     <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></symbol>
     <symbol id="i-history" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></symbol>
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></symbol>
     <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
@@ -55,6 +57,7 @@
         <a class="nav-item" data-screen="certs" href="#"><svg class="icon"><use href="#i-cert"/></svg><span class="nav-label">证书</span></a>
         <a class="nav-item" data-screen="history" href="#"><svg class="icon"><use href="#i-history"/></svg><span class="nav-label">连接记录</span></a>
         <a class="nav-item" data-screen="settings" href="#"><svg class="icon"><use href="#i-gear"/></svg><span class="nav-label">设置</span></a>
+        <a class="nav-item" data-screen="about" href="#"><svg class="icon"><use href="#i-info"/></svg><span class="nav-label">关于</span></a>
       </div>
     </nav>
   </aside>
@@ -255,6 +258,41 @@
           </div>
         </div>
       </section>
+      <section data-panel="about" hidden>
+        <div class="section-head"><h2>关于</h2><div class="spacer"></div></div>
+        <div class="card" style="margin-bottom:16px">
+          <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+            <h3 style="margin:0">检查更新</h3>
+            <button class="btn btn-primary" id="checkUpdateBtn"><svg class="icon icon-sm"><use href="#i-refresh"/></svg>检查更新</button>
+            <span id="updateStatus" class="hint" style="margin:0"></span>
+          </div>
+          <div id="updateResult" hidden style="margin-top:10px"></div>
+        </div>
+        <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
+          <div class="card" style="flex:2;min-width:320px">
+            <h3>更新日志</h3>
+            <div id="changelogList" class="hint">点击「检查更新」查看历史版本记录。</div>
+          </div>
+          <div class="card" style="flex:1;min-width:300px">
+            <h3>Bug 反馈</h3>
+            <div class="field"><label>类别</label><select class="input" id="fbCategory"><option value="连接问题">连接问题</option><option value="客户端管理">客户端管理</option><option value="用户/权限">用户/权限</option><option value="界面问题">界面问题</option><option value="升级安装">升级安装</option><option value="其他">其他</option></select></div>
+            <div class="field"><label>标题 <b style="color:var(--danger,#e5484d)">*</b></label><input class="input" id="fbTitle" placeholder="简要描述问题" /></div>
+            <div class="field"><label>详细描述</label><textarea class="input" id="fbDesc" rows="4" placeholder="复现步骤、期望行为、实际表现等"></textarea></div>
+            <div class="field"><label>联系方式（可选）</label><input class="input" id="fbContact" placeholder="邮箱 / 手机号，便于跟进" /></div>
+            <div class="field">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" id="fbLogs" checked style="width:16px;height:16px;accent-color:var(--accent,#4f7cff)" />
+                附带系统日志
+              </label>
+              <div class="hint">勾选后将附上应用版本、服务端协议及 Web 后端 / 辅助脚本日志（含错误上下文，约 1000 行上限），便于排查；日志中不含密码与密钥。</div>
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:6px">
+              <button class="btn btn-primary" id="fbSubmit"><svg class="icon icon-sm"><use href="#i-send"/></svg>提交反馈</button>
+            </div>
+            <div class="err" id="fbErr"></div>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 </div>
@@ -285,6 +323,11 @@
           <div class="field" style="flex:2"><label>端口</label><input class="input" id="wizPort" value="1194" /></div>
           <div class="field" style="flex:1"><label>协议</label><select class="input" id="wizProto"><option value="udp">UDP</option><option value="tcp">TCP</option></select></div>
         </div>
+        <div class="input-group" style="margin-top:10px">
+          <label style="display:flex;align-items:center;gap:6px;flex:1"><input type="checkbox" id="wizIpv6" style="width:16px;height:16px;accent-color:var(--accent,#4f7cff)" /> IPv6 支持</label>
+          <label style="display:flex;align-items:center;gap:6px;flex:1"><input type="checkbox" id="wizGateway" style="width:16px;height:16px;accent-color:var(--accent,#4f7cff)" /> 网关模式（全局代理）</label>
+        </div>
+        <div class="hint" style="margin-top:6px">可在初始化后到「设置」页随时调整。</div>
         <div class="err" id="wizErr2"></div>
       </div>
       <div class="wpanel" data-wp="3" hidden>

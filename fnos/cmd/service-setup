@@ -57,6 +57,20 @@ service_postinst() {
         ln -s "${TRIM_APPDEST}/ui" "${APP_BASE}/ui"
         install_log "Symlinked ui -> ${APP_BASE}/ui"
     fi
+    # 权限合规（上架要求）：Web 管理后端以 nobody 降权运行，但改子网/网关模式等操作
+    # 需要 iptables/nft（ovpn-helper.sh ensure_nat）。通过 sudoers 白名单授权 nobody
+    # 免密执行这些特权命令——仅限本应用 helper 与防火墙工具，权限面最小。
+    # TRIM_APPDEST 含卷号（如 /vol2/@appcenter/openvpn），用通配符 /vol*/ 兼容任意数据卷。
+    local SUDOERS="/etc/sudoers.d/${TRIM_APPNAME}"
+    {
+        echo "# openvpn: Web 后端(nobody) 特权操作白名单（安装时生成）"
+        echo "nobody ALL=(root) NOPASSWD: ${TRIM_APPDEST}/bin/ovpn-helper.sh"
+        echo "nobody ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/iptables-legacy, /usr/sbin/iptables-nft, /usr/sbin/ip6tables, /usr/sbin/ip6tables-legacy, /usr/sbin/ip6tables-nft, /usr/sbin/nft"
+        # chown：web(nobody) 在 revoke/gen-crl 后把 root 写的 pki 归 nobody（helper 内部已处理 genclient）
+        echo "nobody ALL=(root) NOPASSWD: /usr/bin/chown, /bin/chown"
+    } > "${SUDOERS}"
+    chmod 440 "${SUDOERS}" 2>/dev/null || true
+    install_log "已配置 sudoers 白名单（nobody → root 仅限 openvpn 特权命令）"
     install_log "安装完成。打开 NAS-IP:8833 进入 Web 管理界面（默认账号 admin / admin）。"
 }
 

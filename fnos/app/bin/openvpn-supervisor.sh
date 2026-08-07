@@ -34,6 +34,9 @@ export LD_LIBRARY_PATH="${APP_LIB_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # 双模式（端口 + 统一网关）：openvpn-web 同时监听 TCP 8833 与 ${TRIM_APPDEST}/app.sock。
 # 网关 socket 放 target 根目录（官方规范 gatewaySocket 只填文件名 app.sock）。
 export SOCKET_PATH="${TRIM_APPDEST}/app.sock"
+# OVPN_HELPER 绝对路径：web(nobody) 经 sudo 执行 helper 时，sudo secure_path 不含 app/bin，
+# 相对路径 "ovpn-helper.sh" 会 sudoers 不匹配 → 添加客户端 500（v1.0.56 坑）。
+export OVPN_HELPER="${TRIM_APPDEST}/bin/ovpn-helper.sh"
 export GATEWAY_PREFIX="/app/openvpn"
 mark "ENV"
 
@@ -43,7 +46,12 @@ mkdir -p "${ETC}" "${ETC}/ccd" "${ETC}/clients"
 # 幂等执行（每次启动都跑，防升级/重装后属主变化）。
 touch "${ETC}/openvpn-status.log" 2>/dev/null || true
 chown nobody:nogroup "${ETC}/openvpn-status.log" 2>/dev/null || true
-chmod 644 "${ETC}/config.json" 2>/dev/null || true
+# config.json 600：含 token(O-Token)/secret_key(AES 密钥)，644 会被其他系统用户读取（v1.0.61 安全审计）；
+# openvpn-auth 钩子以 nobody 运行，600(nobody owner) 即可读取。
+chmod 600 "${ETC}/config.json" 2>/dev/null || true
+# Web 后端（nobody 降权运行，上架合规）需要在 target 根目录创建统一网关 socket（app.sock），
+# 故 TRIM_APPDEST 根目录需 nobody 可写；socket 文件本身权限 0666 由 umask 控制，网关可连接。
+chown nobody:nogroup "${TRIM_APPDEST}" 2>/dev/null || true
 mark "MKDIR"
 
 # 清理上一轮残留的孤儿进程。
@@ -97,9 +105,17 @@ last_line_marker() {
 
 # 1) Web 管理后端保活循环
 run_web() {
+    # 权限合规（上架要求）：Web 管理后端以 nobody 降权运行（root 仅用于特权准备）。
+    # 数据目录先归 nobody：web 要写 config.json(pki/证书/客户端配置/ovpn.db)，读取 openvpn-auth 的 token。
+    # 特权操作（iptables/nft → ovpn-helper.sh）通过 service_postinst 配置的 sudoers 白名单以 root 执行。
+    chown -R nobody:nogroup "${ETC}" 2>/dev/null || true
+    chmod 600 "${ETC}/config.json" 2>/dev/null || true
+    # web_out.log 需 nobody 可写（重定向目标）
+    touch "${ETC}/web_out.log" 2>/dev/null || true
+    chown nobody:nogroup "${ETC}/web_out.log" "${ETC}/web.pid" 2>/dev/null || true
     while true; do
         mark "WEBLOOP_TICK"
-        "${APP_BIN_DIR}/openvpn-web" >"${ETC}/web_out.log" 2>&1 &
+        runuser -u nobody --preserve-environment -- "${APP_BIN_DIR}/openvpn-web" >>"${ETC}/web_out.log" 2>&1 &
         local pid=$!
         echo "$pid" > "${ETC}/web.pid"
         local i
@@ -149,7 +165,7 @@ mark "CONFIG_WAIT_DONE"
 # config.json 生成后再修权限：openvpn-web(viper) 创建文件时强制 0600（root 专属），
 # 而 openvpn-auth 认证钩子以 nobody 运行需读取 token；若 openvpn 先于 web 生成配置
 # 或 viper 重写配置，需在此处兜底 chmod 644（幂等）。
-chmod 644 "${ETC}/config.json" 2>/dev/null || true
+chmod 600 "${ETC}/config.json" 2>/dev/null || true
 
 if [ ! -f "${ETC}/config.json" ]; then
     mark "REASON_CONFIG_TIMEOUT"
@@ -175,6 +191,10 @@ else
         exit 1
     fi
 fi
+# 兜底：init/ensure_server 由 root 执行，产物（pki/server.conf）归 root 700/644，
+# web(nobody) 读证书统计/写 server.conf 会 denied。helper 内部已 chown，这里再兜底一次
+# （覆盖升级/手动改数据等任何 root 写回的场景）。
+chown -R nobody:nogroup "${ETC}" 2>/dev/null || true
 mark "SERVERCONF_DONE"
 
 mark "BEFORE_RUNVPN"

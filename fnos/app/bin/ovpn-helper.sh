@@ -7,7 +7,18 @@ set -e
 # 脚本自身所在目录 = app/bin
 APP_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 所有数据都在 OVPN_DATA 下（由 service-setup 注入，指向数据卷 etc/）
+# 所有数据都在 OVPN_DATA 下（指向数据卷 etc/）。
+# 优先级：显式环境变量 > TRIM_PKGVAR（fnOS 生命周期注入）> 默认路径。
+# 关键：Web 后端以 nobody 降权运行后通过 sudo 调用本脚本，sudo 默认清空环境变量，
+# 故必须能自推断 OVPN_DATA，不能只依赖 OVPN_DATA 环境变量。
+if [ -z "${OVPN_DATA:-}" ]; then
+    if [ -n "${TRIM_PKGVAR:-}" ]; then
+        OVPN_DATA="${TRIM_PKGVAR}/etc"
+    else
+        OVPN_DATA="/vol2/@appdata/openvpn/etc"
+    fi
+fi
+export OVPN_DATA
 SYSTEM_CONFIG="$OVPN_DATA/config.json"
 export EASYRSA_PKI="$OVPN_DATA/pki"
 export EASYRSA="$APP_BIN_DIR"
@@ -34,6 +45,9 @@ EOF
 	easyrsa --batch build-server-full "$SERVER_NAME" nopass
 	easyrsa gen-crl
 	openvpn --genkey secret "$EASYRSA_PKI/tc.key"
+	# root 跑完归 nobody：supervisor 的 chown 在 init 之前执行，init 建的 pki 是 root 700，
+	# web(nobody) 读证书统计/CRL 会 permission denied（v1.0.55 降权后遗漏）。
+	chown -R nobody:nogroup "$EASYRSA_PKI" 2>/dev/null || true
 }
 
 init_config() {
@@ -107,6 +121,10 @@ ensure_server() {
 	# 网关模式 NAT/IP 转发也是内存态，重启后必须重建
 	ensure_nat
 	init_config
+	# root 跑完归 nobody：server.conf 需 web(nobody) 手动编辑保存（main.go OpenFile O_TRUNC），
+	# pki 需 web 读证书统计（v1.0.55 降权后遗漏，同 init_pki）。
+	chown -R nobody:nogroup "$EASYRSA_PKI" 2>/dev/null || true
+	chown nobody:nogroup "$OVPN_DATA/server.conf" 2>/dev/null || true
 }
 
 # 网关模式（全局代理）：确保 NAT(MASQUERADE) 与 IP 转发。
@@ -197,6 +215,8 @@ renew_cert() {
 	easyrsa --batch --days=$1 renew "$SERVER_NAME"
 	easyrsa --batch revoke-renewed "$SERVER_NAME"
 	easyrsa --batch --days=$1 gen-crl
+	# root 跑完归 nobody（同 genclient，见上）
+	chown -R nobody:nogroup "$EASYRSA_PKI" 2>/dev/null || true
 }
 
 auth() {
@@ -278,6 +298,12 @@ $(cat "$EASYRSA_PKI/private/$1.key")
 $(cat "$EASYRSA_PKI/tc.key")
 </tls-crypt>
 EOF
+
+    # root 跑完证书操作后归 nobody：web 后端以 nobody 降权运行，要读 pki
+    # 统计证书/CRL（main.go 证书列表、添加客户端后刷新）。不 chown 则产物 root 700，
+    # nobody 读不到 → 添加客户端后列表加载 permission denied（v1.0.55 降权后 bug）。
+    chown -R nobody:nogroup "$EASYRSA_PKI" 2>/dev/null || true
+    chown nobody:nogroup "$OVPN_DATA/clients/$1.ovpn" 2>/dev/null || true
 }
 
 # ---- 以下为 openvpn 脚本钩子（client-connect / client-disconnect / learn-address）----

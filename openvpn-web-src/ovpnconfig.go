@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path"
 	"slices"
 	"strings"
@@ -169,15 +168,15 @@ func (cfg *VPNConfig) Update(key string, val string) {
 		cfg.Set("server", val)
 
 		ipt := "iptables-nft"
-		checkCmd := exec.Command("iptables-legacy", "-L", "-n", "-t", "nat")
+		checkCmd := privExec("iptables-legacy", "-L", "-n", "-t", "nat")
 		if err := checkCmd.Run(); err == nil {
 			ipt = "iptables-legacy"
 		}
 
 		if oldSubnet != "" && oldSubnet != val {
-			getOldCmd := exec.Command(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", strings.ReplaceAll(oldSubnet, " ", "/"), "-j", "MASQUERADE")
+			getOldCmd := privExec(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", strings.ReplaceAll(oldSubnet, " ", "/"), "-j", "MASQUERADE")
 			if err := getOldCmd.Run(); err == nil {
-				delOldCmd := exec.Command(ipt, "-t", "nat", "-D", "POSTROUTING", "-s", strings.ReplaceAll(oldSubnet, " ", "/"), "-j", "MASQUERADE")
+				delOldCmd := privExec(ipt, "-t", "nat", "-D", "POSTROUTING", "-s", strings.ReplaceAll(oldSubnet, " ", "/"), "-j", "MASQUERADE")
 				if out, err := delOldCmd.CombinedOutput(); err != nil {
 					if len(out) == 0 {
 						out = []byte(err.Error())
@@ -187,9 +186,9 @@ func (cfg *VPNConfig) Update(key string, val string) {
 			}
 		}
 
-		getCmd := exec.Command(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", strings.ReplaceAll(val, " ", "/"), "-j", "MASQUERADE")
+		getCmd := privExec(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", strings.ReplaceAll(val, " ", "/"), "-j", "MASQUERADE")
 		if err := getCmd.Run(); err != nil {
-			addCmd := exec.Command(ipt, "-t", "nat", "-A", "POSTROUTING", "-s", strings.ReplaceAll(val, " ", "/"), "-j", "MASQUERADE")
+			addCmd := privExec(ipt, "-t", "nat", "-A", "POSTROUTING", "-s", strings.ReplaceAll(val, " ", "/"), "-j", "MASQUERADE")
 			if out, err := addCmd.CombinedOutput(); err != nil {
 				if len(out) == 0 {
 					out = []byte(err.Error())
@@ -231,7 +230,7 @@ func (cfg *VPNConfig) Update(key string, val string) {
 		}
 		// 网关模式开关触发时同步 NAT（MASQUERADE）与 IP 转发，保证热更新后即可用；
 		// 关闭时清理 NAT。重启场景由 ovpn-helper.sh ensure_nat 兜底。
-		cmd := exec.Command(ovpnHelper, "ensure_nat")
+		cmd := privExec(ovpnHelper, "ensure_nat")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			if len(out) == 0 {
 				out = []byte(err.Error())
@@ -242,7 +241,7 @@ func (cfg *VPNConfig) Update(key string, val string) {
 		cfg.Set("management", strings.ReplaceAll(val, ":", " "))
 	case "openvpn.ovpn_ipv6":
 		ipt := "ip6tables-nft"
-		checkCmd := exec.Command("ip6tables-legacy", "-L", "-n", "-t", "nat")
+		checkCmd := privExec("ip6tables-legacy", "-L", "-n", "-t", "nat")
 		if err := checkCmd.Run(); err == nil {
 			ipt = "ip6tables-legacy"
 		}
@@ -253,9 +252,9 @@ func (cfg *VPNConfig) Update(key string, val string) {
 			// 且多数客户端不认 tcp6 标记（报 remote endpoint undefined）。
 			cfg.Set("server-ipv6", conf.Openvpn.OvpnSubnet6)
 
-			getCmd := exec.Command(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", conf.Openvpn.OvpnSubnet6, "-j", "MASQUERADE")
+			getCmd := privExec(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", conf.Openvpn.OvpnSubnet6, "-j", "MASQUERADE")
 			if err := getCmd.Run(); err != nil {
-				addCmd := exec.Command(ipt, "-t", "nat", "-A", "POSTROUTING", "-s", conf.Openvpn.OvpnSubnet6, "-j", "MASQUERADE")
+				addCmd := privExec(ipt, "-t", "nat", "-A", "POSTROUTING", "-s", conf.Openvpn.OvpnSubnet6, "-j", "MASQUERADE")
 				if out, err := addCmd.CombinedOutput(); err != nil {
 					if len(out) == 0 {
 						out = []byte(err.Error())
@@ -267,9 +266,9 @@ func (cfg *VPNConfig) Update(key string, val string) {
 			cfg.Set("proto", conf.Openvpn.OvpnProto)
 			cfg.Delete("server-ipv6")
 
-			getCmd := exec.Command(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", conf.Openvpn.OvpnSubnet6, "-j", "MASQUERADE")
+			getCmd := privExec(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", conf.Openvpn.OvpnSubnet6, "-j", "MASQUERADE")
 			if err := getCmd.Run(); err == nil {
-				delCmd := exec.Command(ipt, "-t", "nat", "-D", "POSTROUTING", "-s", conf.Openvpn.OvpnSubnet6, "-j", "MASQUERADE")
+				delCmd := privExec(ipt, "-t", "nat", "-D", "POSTROUTING", "-s", conf.Openvpn.OvpnSubnet6, "-j", "MASQUERADE")
 				if out, err := delCmd.CombinedOutput(); err != nil {
 					if len(out) == 0 {
 						out = []byte(err.Error())
@@ -285,15 +284,15 @@ func (cfg *VPNConfig) Update(key string, val string) {
 			cfg.Set("server-ipv6", val)
 
 			ipt := "ip6tables-nft"
-			checkCmd := exec.Command("ip6tables-legacy", "-L", "-n", "-t", "nat")
+			checkCmd := privExec("ip6tables-legacy", "-L", "-n", "-t", "nat")
 			if err := checkCmd.Run(); err == nil {
 				ipt = "ip6tables-legacy"
 			}
 
 			if oldSubnet6 != "" && oldSubnet6 != val {
-				getOldCmd := exec.Command(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", oldSubnet6, "-j", "MASQUERADE")
+				getOldCmd := privExec(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", oldSubnet6, "-j", "MASQUERADE")
 				if err := getOldCmd.Run(); err == nil {
-					delOldCmd := exec.Command(ipt, "-t", "nat", "-D", "POSTROUTING", "-s", oldSubnet6, "-j", "MASQUERADE")
+					delOldCmd := privExec(ipt, "-t", "nat", "-D", "POSTROUTING", "-s", oldSubnet6, "-j", "MASQUERADE")
 					if out, err := delOldCmd.CombinedOutput(); err != nil {
 						if len(out) == 0 {
 							out = []byte(err.Error())
@@ -303,9 +302,9 @@ func (cfg *VPNConfig) Update(key string, val string) {
 				}
 			}
 
-			getCmd := exec.Command(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", val, "-j", "MASQUERADE")
+			getCmd := privExec(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", val, "-j", "MASQUERADE")
 			if err := getCmd.Run(); err != nil {
-				addCmd := exec.Command(ipt, "-t", "nat", "-A", "POSTROUTING", "-s", val, "-j", "MASQUERADE")
+				addCmd := privExec(ipt, "-t", "nat", "-A", "POSTROUTING", "-s", val, "-j", "MASQUERADE")
 				if out, err := addCmd.CombinedOutput(); err != nil {
 					if len(out) == 0 {
 						out = []byte(err.Error())
@@ -317,7 +316,7 @@ func (cfg *VPNConfig) Update(key string, val string) {
 			// 同步 nft ip6 表（ip6 openvpn-nat）：ip6tables 与 nft 是两套链路，
 			// 当前网关模式实际依赖 nft 表，只改 ip6tables 会导致 nft 残留旧子网、
 			// IPv6 隧道流量 MASQUERADE 失效。ensure_nat 会整表重建（删旧建新）。
-			if out, err := exec.Command(ovpnHelper, "ensure_nat").CombinedOutput(); err != nil {
+			if out, err := privExec(ovpnHelper, "ensure_nat").CombinedOutput(); err != nil {
 				if len(out) == 0 {
 					out = []byte(err.Error())
 				}

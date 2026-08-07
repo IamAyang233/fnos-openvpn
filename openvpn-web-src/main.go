@@ -133,14 +133,107 @@ var (
 	reInfoLine = regexp.MustCompile(">INFO(.)*\r\n")
 )
 
+// protoLineRe / remotePortRe：下载客户端配置时动态修正协议与端口（v1.0.58）。
+var (
+	protoLineRe  = regexp.MustCompile(`(?m)^proto .*$`)
+	remotePortRe = regexp.MustCompile(`(?m)^remote (\S+) \d+$`)
+)
+
+// feedbackAPI 返回 panda 主页根地址（v1.0.63 起）。
+// 可在设置页配置 system.base.feedback_api；默认指向本机 panda（host 网络 4700）。
+// 子路径：更新查询 /api/app-update/<app>，Bug 反馈 /api/openvpn/feedback。
+func feedbackAPI() string {
+	if v := viper.GetString("system.base.feedback_api"); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	return "http://127.0.0.1:4700"
+}
+
+// feedbackToken 返回 Bug 反馈共享密钥（与 panda OPENVPN_FEEDBACK_TOKEN 对应，v1.0.63 起）。
+func feedbackToken() string {
+	if v := viper.GetString("system.base.feedback_token"); v != "" {
+		return v
+	}
+	return "fnos-openvpn-feedback"
+}
+
+// collectAppLogs 收集应用诊断信息 + 日志（随 Bug 反馈提交，v1.0.63 起）。
+// 日志策略（v1.0.66）：web_out.log 增长快（仪表盘轮询 ~140 行/分钟），固定尾部 N 行会被
+// 正常访问日志冲掉——改为「最近错误上下文」：从尾部往前找最近的错误/失败标记，
+// 从错误前 20 行截到末尾；找不到错误则取尾部 300 行；上限 1000 行。
+func collectAppLogs() string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "=== openvpn 应用诊断信息 ===\n")
+	fmt.Fprintf(&sb, "版本: %s\n", version)
+	fmt.Fprintf(&sb, "服务端: proto=%s port=%s\n", viper.GetString("openvpn.ovpn_proto"), viper.GetString("openvpn.ovpn_port"))
+	fmt.Fprintf(&sb, "时间: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
+	logErrRe := regexp.MustCompile(`(?i)error|denied|fail|panic|refused|timeout|异常|失败|超时`)
+	tail := func(name string, maxLines, errCtx int) {
+		p := filepath.Join(ovData, name)
+		data, err := os.ReadFile(p)
+		if err != nil {
+			fmt.Fprintf(&sb, "--- %s: (无此日志) ---\n", name)
+			return
+		}
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		n := len(lines)
+		start := 0
+		// 从尾部往前（最多回溯 3000 行）找最近的错误标记
+		for i := n - 1; i >= 0 && i >= n-3000; i-- {
+			if logErrRe.MatchString(lines[i]) {
+				start = i - errCtx
+				if start < 0 {
+					start = 0
+				}
+				break
+			}
+		}
+		if start == 0 && n > maxLines {
+			start = n - maxLines
+		}
+		if n-start > 1000 {
+			start = n - 1000
+		}
+		seg := lines[start:]
+		fmt.Fprintf(&sb, "--- %s (第 %d-%d 行，共 %d 行) ---\n%s\n", name, start+1, n, n, strings.Join(seg, "\n"))
+	}
+	tail("web_out.log", 300, 20)
+	tail("helper_out.log", 100, 10)
+	return sb.String()
+}
+
 // ovpnHelper 是证书/客户端生成辅助脚本（替代原 docker-entrypoint.sh 的调用，
 // 适配纯 FPK 无 docker 环境）。可通过 OVPN_HELPER 环境变量覆盖路径。
+// 兜底：用 TRIM_APPDEST 构造绝对路径——web 以 nobody 降权后经 sudo 执行，
+// sudo 的 secure_path 不含 app/bin，相对路径会 "command not found / password required"
+// （v1.0.56 添加客户端 500 的根因），必须用绝对路径匹配 sudoers 白名单。
 var ovpnHelper = func() string {
 	if v := os.Getenv("OVPN_HELPER"); v != "" {
 		return v
 	}
+	if d := os.Getenv("TRIM_APPDEST"); d != "" {
+		return d + "/bin/ovpn-helper.sh"
+	}
 	return "ovpn-helper.sh"
 }()
+
+// privCmd 返回可执行的命令与参数：Web 后端以 nobody 降权运行（上架合规），
+// 但 helper（easyrsa 证书 / iptables NAT / nft）需要 root。
+// 通过 service_postinst 配置的 sudoers 白名单（nobody → root NOPASSWD: ovpn-helper.sh + iptables*）执行。
+// root 运行时（开发/兜底）不加前缀。用法：cmd, args := privCmd("ovpn-helper.sh", "ensure_nat");
+// exec.Command(cmd, args...)。
+func privCmd(cmd string, args ...string) (string, []string) {
+	if os.Geteuid() != 0 {
+		return "sudo", append([]string{"-n", cmd}, args...)
+	}
+	return cmd, args
+}
+
+// privExec 便捷封装：返回 *exec.Cmd（已带 sudo 前缀）。
+func privExec(cmd string, args ...string) *exec.Cmd {
+	c, a := privCmd(cmd, args...)
+	return exec.Command(c, a...)
+}
 
 func (ov *ovpn) sendCommand(command string) (string, error) {
 	var data string
@@ -1023,6 +1116,72 @@ func main() {
 	{
 		ovpn.StaticFS("/download", http.Dir(filepath.Join(ovData, "clients")))
 
+		// GET /ovpn/update —— 检测更新（转发 panda 主页 /api/app-update/openvpn，数据后台人工录入）
+		ovpn.GET("/update", func(c *gin.Context) {
+			api := strings.TrimRight(feedbackAPI(), "/")
+			u := api + "/api/app-update/openvpn"
+			resp, err := http.Get(u)
+			if err != nil {
+				c.JSON(http.StatusOK, gin.H{"ok": false, "error": "无法连接更新服务（" + api + "）: " + err.Error()})
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			var out map[string]interface{}
+			if err := json.Unmarshal(body, &out); err != nil {
+				c.JSON(http.StatusOK, gin.H{"ok": false, "error": "更新服务响应异常"})
+				return
+			}
+			// current 覆盖为应用自身版本（panda 的 current 是最新发布版本）
+			out["current"] = version
+			c.JSON(http.StatusOK, out)
+		})
+
+		// POST /ovpn/feedback —— Bug 反馈（收集日志 + 转发 panda 主页 /api/openvpn/feedback）
+		ovpn.POST("/feedback", func(c *gin.Context) {
+			title := c.PostForm("title")
+			if strings.TrimSpace(title) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "请填写反馈标题"})
+				return
+			}
+			logs := ""
+			if c.PostForm("include_logs") == "true" {
+				logs = collectAppLogs()
+			}
+			payload, _ := json.Marshal(map[string]string{
+				"version":     version,
+				"category":    c.PostForm("category"),
+				"title":       title,
+				"description": c.PostForm("description"),
+				"contact":     c.PostForm("contact"),
+				"logs":        logs,
+			})
+			req, err := http.NewRequest("POST", strings.TrimRight(feedbackAPI(), "/")+"/api/openvpn/feedback", bytes.NewReader(payload))
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Feedback-Token", feedbackToken())
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "反馈服务不可达: " + err.Error()})
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			var out map[string]interface{}
+			if err := json.Unmarshal(body, &out); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "反馈服务响应异常"})
+				return
+			}
+			if ok, _ := out["ok"].(bool); !ok {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("反馈提交失败: %v", out["error"])})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"message": "反馈已提交，感谢！", "id": out["id"]})
+		})
+
 		ovpn.POST("/server", func(c *gin.Context) {
 			a := c.PostForm("action")
 
@@ -1036,7 +1195,7 @@ func main() {
 					if v == "true" {
 						msg = "启用"
 					}
-					cmd := exec.Command(ovpnHelper, "auth", v)
+					cmd := privExec(ovpnHelper, "auth", v)
 					if out, err := cmd.CombinedOutput(); err != nil {
 						if len(out) == 0 {
 							out = []byte(err.Error())
@@ -1051,7 +1210,7 @@ func main() {
 			case "renewCert":
 				day := c.PostForm("day")
 
-				cmd := exec.Command(ovpnHelper, "renewcert", day)
+				cmd := privExec(ovpnHelper, "renewcert", day)
 				if out, err := cmd.CombinedOutput(); err != nil {
 					if len(out) == 0 {
 						out = []byte(err.Error())
@@ -1067,7 +1226,7 @@ func main() {
 				// 完整重启语义：① config.json → server.conf 增量同步（保留手动编辑行）；
 				// ② ensure_nat 重建 NAT/IP 转发（内存态，重启即失）；③ SIGHUP 让 openvpn 加载新配置。
 				upadteOvpnConfig()
-				if out, err := exec.Command(ovpnHelper, "ensure_nat").CombinedOutput(); err != nil {
+				if out, err := privExec(ovpnHelper, "ensure_nat").CombinedOutput(); err != nil {
 					if len(out) == 0 {
 						out = []byte(err.Error())
 					}
@@ -1747,7 +1906,18 @@ func main() {
 				return
 			}
 
-			c.JSON(http.StatusOK, gin.H{"content": string(data)})
+			// v1.0.58：磁盘 .ovpn 是添加客户端时的配置，改协议/端口后不会自动更新，
+			// 旧配置（如 proto udp）与服务端（tcp）不匹配会导致客户端连不上。
+			// 下载时按当前 config.json 动态修正 proto 与 remote 端口。
+			content := string(data)
+			if proto := viper.GetString("openvpn.ovpn_proto"); proto != "" {
+				content = protoLineRe.ReplaceAllString(content, "proto "+proto)
+			}
+			if port := viper.GetString("openvpn.ovpn_port"); port != "" {
+				content = remotePortRe.ReplaceAllString(content, "remote $1 "+port)
+			}
+
+			c.JSON(http.StatusOK, gin.H{"content": content})
 		})
 
 		ovpn.PUT("/client/:name/ccd", func(c *gin.Context) {
@@ -1847,7 +2017,7 @@ func main() {
 			_, err = clientsRoot.Stat(name + ".ovpn")
 			if err != nil {
 				if os.IsNotExist(err) {
-					cmd := exec.Command(ovpnHelper, "genclient", name, serverAddr, serverPort, config, ccdConfig, mfa)
+					cmd := privExec(ovpnHelper, "genclient", name, serverAddr, serverPort, config, ccdConfig, mfa)
 					if out, err := cmd.CombinedOutput(); err != nil {
 						if len(out) == 0 {
 							out = []byte(err.Error())
@@ -1876,19 +2046,24 @@ func main() {
 				return
 			}
 
-		cmd := exec.Command("easyrsa", "--batch", "revoke", name)
+		cmd := privExec("easyrsa", "--batch", "revoke", name)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			// 证书不存在/已吊销/空壳客户端等情况：忽略 revoke 错误，继续清理关联文件（不再返回 500）
 			fmt.Printf("[DELETE-CLIENT] revoke %s 失败（已忽略，继续清理）: %s\n", name, string(out))
 		} else {
-				cmd = exec.Command("easyrsa", "gen-crl")
+				cmd = privExec("easyrsa", "gen-crl")
 				if out, err = cmd.CombinedOutput(); err != nil {
 					logger.Error(context.Background(), string(out))
 					c.JSON(http.StatusInternalServerError, gin.H{"message": "更新CRL证书失败"})
 					return
 				}
 			}
+		// revoke/gen-crl 以 root 写 pki，产物 root 700 → web(nobody) 读 crl.pem 列表失败。
+		// root 跑完归 nobody（与 helper genclient 末尾 chown 一致）。
+		if err := privExec("chown", "-R", "nobody:nogroup", filepath.Join(ovData, "pki")).Run(); err != nil {
+			logger.Error(context.Background(), "chown pki 失败: "+err.Error())
+		}
 
 		// 直接以绝对路径删除关联文件，检查 error 并明确返回，避免“已吊销但列表仍在”的假成功
 		ovpnFile := filepath.Join(ovData, "clients", fmt.Sprintf("%s.ovpn", name))
