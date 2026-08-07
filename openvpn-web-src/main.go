@@ -139,14 +139,16 @@ var (
 	remotePortRe = regexp.MustCompile(`(?m)^remote (\S+) \d+$`)
 )
 
-// feedbackAPI 返回 panda 主页根地址（v1.0.63 起）。
-// 可在设置页配置 system.base.feedback_api；默认指向本机 panda（host 网络 4700）。
+// feedbackAPI 返回 PanDa 更新服务根地址（v1.0.68 起默认公网域名）。
+// 应用是公开发布的，其他用户的 NAS 上没有本地 PanDa——必须走公网域名
+// （www.aykeji.cn 反代到 PanDa，查询/反馈 API 均为公开白名单 + token 鉴权）。
+// 可在设置页配置 system.base.feedback_api 覆盖（如内网部署可指 127.0.0.1:4700）。
 // 子路径：更新查询 /api/app-update/<app>，Bug 反馈 /api/openvpn/feedback。
 func feedbackAPI() string {
 	if v := viper.GetString("system.base.feedback_api"); v != "" {
 		return strings.TrimRight(v, "/")
 	}
-	return "http://127.0.0.1:4700"
+	return "https://www.aykeji.cn"
 }
 
 // feedbackToken 返回 Bug 反馈共享密钥（与 panda OPENVPN_FEEDBACK_TOKEN 对应，v1.0.63 起）。
