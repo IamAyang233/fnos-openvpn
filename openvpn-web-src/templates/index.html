@@ -238,6 +238,13 @@
             </label>
             <div class="hint">启用后隧道双栈运行（server-ipv6 + IPv6 NAT），IPv4/IPv6 客户端均可接入；传输协议保持 tcp/udp 不变，兼容所有客户端。</div>
           </div>
+          <div class="field">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="setIpv6Listen" style="width:16px;height:16px;accent-color:var(--accent,#4f7cff)" />
+              IPv6 直连监听
+            </label>
+            <div class="hint">允许客户端经公网 IPv6 直接连接服务器（监听协议自动切换 tcp6/udp6，双栈同时接收 IPv4 与 IPv6 客户端）。需服务器所在网络有公网 IPv6 地址；开启后下载的配置将附带服务器公网 IPv6 地址。</div>
+          </div>
           <div class="field"><label>IPv6 子网</label><input class="input" id="setSubnet6" value="" placeholder="fdaf:f178:e916:6dd0::/64" /><div class="hint">客户端 IPv6 地址池（ULA 前缀，通常无需修改）。</div></div>
           <div class="field">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
@@ -323,9 +330,10 @@
           <div class="field" style="flex:2"><label>端口</label><input class="input" id="wizPort" value="1194" /></div>
           <div class="field" style="flex:1"><label>协议</label><select class="input" id="wizProto"><option value="udp">UDP</option><option value="tcp">TCP</option></select></div>
         </div>
-        <div class="input-group" style="margin-top:10px">
-          <label style="display:flex;align-items:center;gap:6px;flex:1"><input type="checkbox" id="wizIpv6" style="width:16px;height:16px;accent-color:var(--accent,#4f7cff)" /> IPv6 支持</label>
-          <label style="display:flex;align-items:center;gap:6px;flex:1"><input type="checkbox" id="wizGateway" style="width:16px;height:16px;accent-color:var(--accent,#4f7cff)" /> 网关模式（全局代理）</label>
+        <div class="input-group" style="margin-top:10px;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:6px;flex:1;min-width:150px"><input type="checkbox" id="wizIpv6" style="width:16px;height:16px;accent-color:var(--accent,#4f7cff)" /> IPv6 支持</label>
+          <label style="display:flex;align-items:center;gap:6px;flex:1;min-width:150px"><input type="checkbox" id="wizIpv6Listen" style="width:16px;height:16px;accent-color:var(--accent,#4f7cff)" /> IPv6 直连监听</label>
+          <label style="display:flex;align-items:center;gap:6px;flex:1;min-width:170px"><input type="checkbox" id="wizGateway" style="width:16px;height:16px;accent-color:var(--accent,#4f7cff)" /> 网关模式（全局代理）</label>
         </div>
         <div class="hint" style="margin-top:6px">可在初始化后到「设置」页随时调整。</div>
         <div class="err" id="wizErr2"></div>

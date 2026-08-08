@@ -998,6 +998,7 @@ func main() {
 				"ovpn_subnet":      viper.GetString("openvpn.ovpn_subnet"),
 				"ovpn_max_clients": viper.GetInt("openvpn.ovpn_max_clients"),
 				"ovpn_ipv6":        viper.GetBool("openvpn.ovpn_ipv6"),
+				"ovpn_ipv6_listen": viper.GetBool("openvpn.ovpn_ipv6_listen"),
 				"ovpn_subnet6":     viper.GetString("openvpn.ovpn_subnet6"),
 				"ovpn_gateway":     viper.GetBool("openvpn.ovpn_gateway"),
 			},
@@ -1019,6 +1020,7 @@ func main() {
 			"admin_username": viper.GetString("system.base.admin_username"),
 			"ovpn_port":     viper.GetString("openvpn.ovpn_port"),
 			"ovpn_proto":    viper.GetString("openvpn.ovpn_proto"),
+			"ovpn_ipv6_listen": viper.GetBool("openvpn.ovpn_ipv6_listen"),
 		})
 	})
 
@@ -2048,23 +2050,15 @@ func main() {
 				return
 			}
 
-		cmd := privExec("easyrsa", "--batch", "revoke", name)
+		// v1.0.69：吊销走 helper（sudoers 已授权 ovpn-helper.sh）。
+		// 此前直接 sudo easyrsa revoke，easyrsa 不在 sudoers 白名单 → revoke 静默失败、
+		// 证书残留导致客户端计数虚高（如 0/3 实际只有 1 个客户端）。
+		// helper revoke 内部完成：easyrsa revoke + gen-crl + chown pki 归 nobody。
+		cmd := privExec(ovpnHelper, "revoke", name)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			// 证书不存在/已吊销/空壳客户端等情况：忽略 revoke 错误，继续清理关联文件（不再返回 500）
 			fmt.Printf("[DELETE-CLIENT] revoke %s 失败（已忽略，继续清理）: %s\n", name, string(out))
-		} else {
-				cmd = privExec("easyrsa", "gen-crl")
-				if out, err = cmd.CombinedOutput(); err != nil {
-					logger.Error(context.Background(), string(out))
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "更新CRL证书失败"})
-					return
-				}
-			}
-		// revoke/gen-crl 以 root 写 pki，产物 root 700 → web(nobody) 读 crl.pem 列表失败。
-		// root 跑完归 nobody（与 helper genclient 末尾 chown 一致）。
-		if err := privExec("chown", "-R", "nobody:nogroup", filepath.Join(ovData, "pki")).Run(); err != nil {
-			logger.Error(context.Background(), "chown pki 失败: "+err.Error())
 		}
 
 		// 直接以绝对路径删除关联文件，检查 error 并明确返回，避免“已吊销但列表仍在”的假成功

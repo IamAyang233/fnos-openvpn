@@ -269,6 +269,7 @@
       $('setProto').value = ov.ovpn_proto || 'udp';
       $('setSubnet').value = ov.ovpn_subnet || '';
       $('setIpv6').checked = !!ov.ovpn_ipv6;
+      $('setIpv6Listen').checked = !!ov.ovpn_ipv6_listen;
       $('setSubnet6').value = ov.ovpn_subnet6 || '';
       $('setGateway').checked = !!ov.ovpn_gateway;
     }).catch(function () {});
@@ -279,6 +280,7 @@
     var proto = $('setProto').value;
     var subnet = $('setSubnet').value.trim();
     var ipv6 = $('setIpv6').checked;
+    var ipv6Listen = $('setIpv6Listen').checked;
     var subnet6 = $('setSubnet6').value.trim();
     var gateway = $('setGateway').checked;
     var p1 = $('setPass').value, p2 = $('setPass2').value;
@@ -288,6 +290,7 @@
     if (proto) payload['openvpn.ovpn_proto'] = proto;
     if (subnet) payload['openvpn.ovpn_subnet'] = subnet;
     payload['openvpn.ovpn_ipv6'] = ipv6;
+    payload['openvpn.ovpn_ipv6_listen'] = ipv6Listen;
     if (subnet6) payload['openvpn.ovpn_subnet6'] = subnet6;
     payload['openvpn.ovpn_gateway'] = gateway;
     if (p1) {
@@ -854,10 +857,10 @@
     }
     function s2() {
       var addr = $('wizAddr').value.trim(), port = $('wizPort').value.trim() || '1194', proto = $('wizProto').value;
-      var ipv6 = $('wizIpv6').checked, gateway = $('wizGateway').checked;
+      var ipv6 = $('wizIpv6').checked, ipv6Listen = $('wizIpv6Listen').checked, gateway = $('wizGateway').checked;
       if (!addr) { err(2, '请填写服务器对外 IP 或域名'); return; }
       err(2, '');
-      request.post('/settings', { 'system.base.server_addr': addr, 'openvpn.ovpn_port': port, 'openvpn.ovpn_proto': proto, 'openvpn.ovpn_ipv6': ipv6, 'openvpn.ovpn_gateway': gateway })
+      request.post('/settings', { 'system.base.server_addr': addr, 'openvpn.ovpn_port': port, 'openvpn.ovpn_proto': proto, 'openvpn.ovpn_ipv6': ipv6, 'openvpn.ovpn_ipv6_listen': ipv6Listen, 'openvpn.ovpn_gateway': gateway })
         .then(function () { state.addr = addr; state.port = port; state.proto = proto; step = 3; render(); }).catch(function (e) { err(2, (e && e.message) || '保存失败'); });
     }
     function s3() {

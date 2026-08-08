@@ -8,14 +8,26 @@ set -e
 APP_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 所有数据都在 OVPN_DATA 下（指向数据卷 etc/）。
-# 优先级：显式环境变量 > TRIM_PKGVAR（fnOS 生命周期注入）> 默认路径。
-# 关键：Web 后端以 nobody 降权运行后通过 sudo 调用本脚本，sudo 默认清空环境变量，
-# 故必须能自推断 OVPN_DATA，不能只依赖 OVPN_DATA 环境变量。
+# 优先级：显式环境变量 > TRIM_PKGVAR（fnOS 生命周期注入）> 官方 /var/apps/{app}/var symlink > 脚本路径自推断 > 默认。
+# 关键：Web 后端以 nobody 降权运行后通过 sudo 调用本脚本，sudo 默认清空环境变量
+# （env_reset，TRIM_PKGVAR 不在 env_keep），故必须能自推断 OVPN_DATA，不能只依赖环境变量。
+# 官方规范（framework.md）：/var/apps/{app}/var → /vol{n}/@appdata/{app}（卷号 n 由 fnOS 决定，
+# 可用 appcenter-cli default-volume 配置，不一定是 vol2！）。此前默认写死 /vol2 是 bug：
+# 任何用户默认卷非 vol2（x86/ARM 均可能）时 jq 读 config.json 必然失败。v1.0.68 修复。
 if [ -z "${OVPN_DATA:-}" ]; then
     if [ -n "${TRIM_PKGVAR:-}" ]; then
         OVPN_DATA="${TRIM_PKGVAR}/etc"
+    elif [ -d "/var/apps/openvpn/var" ]; then
+        # 官方数据目录 symlink（sudo 后仍可访问，跨卷正确）
+        OVPN_DATA="/var/apps/openvpn/var/etc"
     else
-        OVPN_DATA="/vol2/@appdata/openvpn/etc"
+        APP_REAL="$(cd "${APP_BIN_DIR}/.." && pwd -P 2>/dev/null)"
+        VOL_NUM="$(echo "${APP_REAL}" | sed -n 's|^/vol\([0-9][0-9]*\)/.*|\1|p')"
+        if [ -n "${VOL_NUM}" ] && [ -d "/vol${VOL_NUM}/@appdata/openvpn" ]; then
+            OVPN_DATA="/vol${VOL_NUM}/@appdata/openvpn/etc"
+        else
+            OVPN_DATA="/vol2/@appdata/openvpn/etc"
+        fi
     fi
 fi
 export OVPN_DATA
@@ -57,6 +69,7 @@ init_config() {
 	OVPN_MAXCLIENTS=$(jq -r '.openvpn.ovpn_maxclients // "200"' "$SYSTEM_CONFIG")
 	OVPN_MANAGEMENT=$(jq -r '.openvpn.ovpn_management // "127.0.0.1:7505"' "$SYSTEM_CONFIG")
 	OVPN_IPV6=$(jq -r '.openvpn.ovpn_ipv6 // "false"' "$SYSTEM_CONFIG")
+	OVPN_IPV6_LISTEN=$(jq -r '.openvpn.ovpn_ipv6_listen // "false"' "$SYSTEM_CONFIG")
 	OVPN_GATEWAY=$(jq -r '.openvpn.ovpn_gateway // "false"' "$SYSTEM_CONFIG")
 	OVPN_SUBNET=$(jq -r '.openvpn.ovpn_subnet // "10.8.0.0/24"' "$SYSTEM_CONFIG")
 	OVPN_SUBNET6=$(jq -r '.openvpn.ovpn_subnet6 // "fdaf:f178:e916:6dd0::/64"' "$SYSTEM_CONFIG")
@@ -65,6 +78,10 @@ init_config() {
 	OVPN_DNS1=$(jq -r '.openvpn.ovpn_push_dns1 // "223.5.5.5"' "$SYSTEM_CONFIG")
 	OVPN_DNS2=$(jq -r '.openvpn.ovpn_push_dns2 // "114.114.114.114"' "$SYSTEM_CONFIG")
 
+	# v1.0.69：IPv6 直连监听开启 → proto 加 6 后缀（tcp6/udp6 双栈，bindv6only=0 时同时收 v4+v6）
+	if [ "$OVPN_IPV6_LISTEN" = "true" ]; then
+		OVPN_PROTO="${OVPN_PROTO}6"
+	fi
 	cat <<EOF >"$OVPN_DATA/server.conf"
 port $OVPN_PORT
 proto $OVPN_PROTO
@@ -137,8 +154,10 @@ ensure_nat() {
 	command -v iptables >/dev/null 2>&1 && IPT=1 || IPT=0
 	[ "$NFT" = "0" ] && [ "$IPT" = "0" ] && { echo "ensure_nat: no nft/iptables" >&2; set -e; return 0; }
 	GATEWAY=$(jq -r '.openvpn.ovpn_gateway // "false"' "$SYSTEM_CONFIG")
+	IPV6_LISTEN=$(jq -r '.openvpn.ovpn_ipv6_listen // "false"' "$SYSTEM_CONFIG")
 	SUBNET=$(jq -r '.openvpn.ovpn_subnet // "10.8.0.0/24"' "$SYSTEM_CONFIG")
 	SUBNET6=$(jq -r '.openvpn.ovpn_subnet6 // ""' "$SYSTEM_CONFIG")
+	OVPN_PORT=$(jq -r '.openvpn.ovpn_port // "1194"' "$SYSTEM_CONFIG")
 
 	# 幂等清理：先删后建，避免规则翻倍/残留
 	if [ "$NFT" = "1" ]; then
@@ -163,6 +182,18 @@ ensure_nat() {
 			rule="${line#-A FORWARD }"
 			iptables -D FORWARD $rule 2>/dev/null
 		done
+	fi
+
+	# IPv6 直连监听（v1.0.69）：放行 IPv6 1194 INPUT（公网 IPv6 客户端连入）
+	# + IPv6 隧道段 FORWARD（客户端 v6 互访/上网）。ip6tables 双保险，幂等添加。
+	if [ "$IPV6_LISTEN" = "true" ]; then
+		ip6tables -C INPUT -p tcp --dport "$OVPN_PORT" -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p tcp --dport "$OVPN_PORT" -j ACCEPT 2>/dev/null
+		ip6tables -C INPUT -p udp --dport "$OVPN_PORT" -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p udp --dport "$OVPN_PORT" -j ACCEPT 2>/dev/null
+		if [ -n "$SUBNET6" ]; then
+			ip6tables -C FORWARD -s "$SUBNET6" -j ACCEPT 2>/dev/null || ip6tables -I FORWARD -s "$SUBNET6" -j ACCEPT 2>/dev/null
+		fi
+		ip6tables -C FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || ip6tables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+		echo "ensure_nat: ipv6 listen firewall ok" >&2
 	fi
 
 	if [ "$GATEWAY" = "true" ]; then
@@ -253,16 +284,31 @@ genclient() {
 	OVPN_PROTO=$(jq -r '.openvpn.ovpn_proto // "udp"' "$SYSTEM_CONFIG")
 	OVPN_PORT=$(jq -r '.openvpn.ovpn_port // "1194"' "$SYSTEM_CONFIG")
 	OVPN_IPV6=$(jq -r '.openvpn.ovpn_ipv6 // "false"' "$SYSTEM_CONFIG")
+	OVPN_IPV6_LISTEN=$(jq -r '.openvpn.ovpn_ipv6_listen // "false"' "$SYSTEM_CONFIG")
 	SERVER_ADDR=$(jq -r '.system.base.server_addr // ""' "$SYSTEM_CONFIG")
 
 	if [ ! -f "$EASYRSA_PKI/private/$1.key" ]; then
 		easyrsa --batch build-client-full "$1" nopass >/dev/null
 	fi
 	mkdir -p "$OVPN_DATA/clients"
+	# v1.0.69：remote 地址处理放在 heredoc 外（函数体），heredoc 内只引用结果。
+	REMOTE_ADDR="${2:-${SERVER_ADDR:-}}"
+	if [ -z "$REMOTE_ADDR" ]; then
+		# 自动检测：IPv6 直连监听开启时优先公网 IPv6，否则 IPv4
+		if [ "$OVPN_IPV6_LISTEN" = "true" ]; then
+			REMOTE_ADDR=$(ip -6 route get 2001:4860:4860::8888 2>/dev/null | grep -oP 'src \K\S+')
+		else
+			REMOTE_ADDR=$(ip -4 route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+')
+		fi
+	fi
+	# IPv6 地址必须加 []（OpenVPN 客户端语法），IPv4 不受影响
+	case "$REMOTE_ADDR" in
+		*:*) REMOTE_ADDR="[$REMOTE_ADDR]" ;;
+	esac
 	cat <<EOF >"$OVPN_DATA/clients/$1.ovpn"
 client
 proto $OVPN_PROTO
-remote ${2:-${SERVER_ADDR:-$([[ "$OVPN_IPV6" == "true" ]] && ip -6 route get 2001:4860:4860::8888 | grep -oP 'src \K\S+' || ip -4 route get 8.8.8.8 | grep -oP 'src \K\S+')}} ${3:-$OVPN_PORT}
+remote $REMOTE_ADDR ${3:-$OVPN_PORT}
 dev tun
 resolv-retry infinite
 nobind
@@ -449,6 +495,20 @@ case $1 in
 	;;
 "ensure_nat")
 	ensure_nat
+	exit 0
+	;;
+"revoke")
+	# 吊销客户端证书 + 重建 CRL + pki 归 nobody（v1.0.69）。
+	# 此前 web 直接 sudo easyrsa revoke，但 sudoers 白名单只授权 helper/iptables/chown，
+	# easyrsa 不被授权 → revoke 静默失败 → 证书残留 → 客户端计数虚高。
+	# 统一走 helper（sudoers 已授权），helper 内部以 root 调 easyrsa 并 chown 回 nobody。
+	if [ -z $2 ]; then
+		echo "请输入吊销客户端名称！"
+		exit 1
+	fi
+	easyrsa --batch revoke "$2" || exit 1
+	easyrsa gen-crl || exit 1
+	chown -R nobody:nogroup "${OVPN_DATA}/pki" 2>/dev/null || true
 	exit 0
 	;;
 "renewcert")

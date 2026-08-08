@@ -60,18 +60,26 @@ service_postinst() {
     # 权限合规（上架要求）：Web 管理后端以 nobody 降权运行，但改子网/网关模式等操作
     # 需要 iptables/nft（ovpn-helper.sh ensure_nat）。通过 sudoers 白名单授权 nobody
     # 免密执行这些特权命令——仅限本应用 helper 与防火墙工具，权限面最小。
-    # TRIM_APPDEST 含卷号（如 /vol2/@appcenter/openvpn），用通配符 /vol*/ 兼容任意数据卷。
+    # v1.0.69：helper 双路径白名单——/var/apps/openvpn/bin（symlink 形式，supervisor 固定用它）
+    # 与 /vol*/@appcenter/openvpn/bin（物理路径通配）。此前只写 ${TRIM_APPDEST}/bin，
+    # 若运行时 TRIM_APPDEST 注入形式（symlink/物理）与安装时不一致 → sudoers 不匹配 →
+    # revoke 等操作报 "sudo: a password is required"。
+    gen_sudoers
+    install_log "已配置 sudoers 白名单（nobody → root 仅限 openvpn 特权命令）"
+    install_log "安装完成。打开 NAS-IP:8833 进入 Web 管理界面（默认账号 admin / admin）。"
+}
+
+# 生成/重建 sudoers 白名单（安装与升级共用，v1.0.69）
+gen_sudoers() {
     local SUDOERS="/etc/sudoers.d/${TRIM_APPNAME}"
     {
-        echo "# openvpn: Web 后端(nobody) 特权操作白名单（安装时生成）"
-        echo "nobody ALL=(root) NOPASSWD: ${TRIM_APPDEST}/bin/ovpn-helper.sh"
+        echo "# openvpn: Web 后端(nobody) 特权操作白名单"
+        echo "nobody ALL=(root) NOPASSWD: /var/apps/openvpn/target/bin/ovpn-helper.sh, /vol*/@appcenter/openvpn/bin/ovpn-helper.sh"
         echo "nobody ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/iptables-legacy, /usr/sbin/iptables-nft, /usr/sbin/ip6tables, /usr/sbin/ip6tables-legacy, /usr/sbin/ip6tables-nft, /usr/sbin/nft"
         # chown：web(nobody) 在 revoke/gen-crl 后把 root 写的 pki 归 nobody（helper 内部已处理 genclient）
         echo "nobody ALL=(root) NOPASSWD: /usr/bin/chown, /bin/chown"
     } > "${SUDOERS}"
     chmod 440 "${SUDOERS}" 2>/dev/null || true
-    install_log "已配置 sudoers 白名单（nobody → root 仅限 openvpn 特权命令）"
-    install_log "安装完成。打开 NAS-IP:8833 进入 Web 管理界面（默认账号 admin / admin）。"
 }
 
 service_postupgrade() {
@@ -81,6 +89,9 @@ service_postupgrade() {
         ln -s "${TRIM_APPDEST}/ui" "${APP_BASE}/ui"
         install_log "Symlinked ui -> ${APP_BASE}/ui"
     fi
+    # v1.0.69：升级后重建 sudoers（旧安装可能只有单路径，revoke 报 password required）
+    gen_sudoers
+    install_log "已重建 sudoers 白名单"
 }
 
 # 启动 / 重启时确保目录与 TUN 就绪（证书与 server.conf 由 supervisor 首次启动时生成）

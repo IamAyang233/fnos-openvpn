@@ -92,7 +92,7 @@ if command -v cygpath >/dev/null 2>&1; then
 else
     BIN_OUT_WIN="$(echo "$BIN_OUT" | sed 's|^/\([a-zA-Z]\)/|\1:/|')"
 fi
-( cd "$SCRIPT_DIR/openvpn-web-src" && GOFLAGS=-mod=mod CGO_ENABLED=0 GOOS=linux GOARCH=$GOARCH_VAL go build -buildvcs=false -a -ldflags "-X main.version=$VERSION" -o "$BIN_OUT_WIN" . ) || error "go build openvpn-web 失败"
+( cd "$SCRIPT_DIR/openvpn-web-src" && GOFLAGS=-mod=mod CGO_ENABLED=0 GOOS=linux GOARCH=$GOARCH_VAL go build -trimpath -buildvcs=false -a -ldflags "-X main.version=$VERSION" -o "$BIN_OUT_WIN" . ) || error "go build openvpn-web 失败"
 # 产物校验：必须为 Linux ELF（Windows 交叉编译经典翻车：不带 GOOS 会产出 PE，装回 NAS 卡 start）
 if command -v file >/dev/null 2>&1; then
     if ! file "$BIN_OUT" 2>/dev/null | grep -q "ELF 64-bit"; then

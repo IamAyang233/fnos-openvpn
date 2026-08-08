@@ -3,7 +3,7 @@
 # 彻底规避"上一轮残留 marker 误导当前观测"的悖论。
 RUN_ID="$(date +%s)-$$"
 mark() {
-    touch "/vol2/@appdata/openvpn/${1}.${RUN_ID}.marker" 2>/dev/null || true
+    touch "${TRIM_PKGVAR:-/vol2/@appdata/openvpn}/${1}.${RUN_ID}.marker" 2>/dev/null || true
 }
 mark "RUN_START"
 # 注意：不再在启动时 rm 旧 marker。
@@ -18,7 +18,9 @@ mark "AFTER_RM"
 ETC="${TRIM_PKGVAR}/etc"
 CONF="${ETC}/server.conf"
 LOG="${TRIM_PKGVAR}/${TRIM_APPNAME}.log"
-ROOT_DIR="/vol2/@appdata/openvpn"
+# v1.0.68：不再写死 /vol2（数据装 vol1 的机器 ROOT_DIR 指向不存在路径）。
+# TRIM_PKGVAR 即 fnOS 注入的运行时数据目录（= /vol{n}/@appdata/openvpn）。
+ROOT_DIR="${TRIM_PKGVAR}"
 
 mark "BOOT"
 trap 'ec=$?; mark "DIED_${ec}"' EXIT
@@ -36,7 +38,11 @@ export LD_LIBRARY_PATH="${APP_LIB_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export SOCKET_PATH="${TRIM_APPDEST}/app.sock"
 # OVPN_HELPER 绝对路径：web(nobody) 经 sudo 执行 helper 时，sudo secure_path 不含 app/bin，
 # 相对路径 "ovpn-helper.sh" 会 sudoers 不匹配 → 添加客户端 500（v1.0.56 坑）。
-export OVPN_HELPER="${TRIM_APPDEST}/bin/ovpn-helper.sh"
+# v1.0.69：固定用 /var/apps/openvpn/target/bin（框架必建 symlink target -> /vol{n}/@appcenter/openvpn，
+# target/bin/ovpn-helper.sh 必然存在；/var/apps/openvpn/bin 本身不存在！）。
+# 避免 TRIM_APPDEST 注入形式（symlink/物理）机器间不一致导致 sudoers 不匹配（revoke 报 password required）。
+# sudoers 白名单已同时包含 target 路径与 /vol*/@appcenter/openvpn/bin 通配。
+export OVPN_HELPER="/var/apps/openvpn/target/bin/ovpn-helper.sh"
 export GATEWAY_PREFIX="/app/openvpn"
 mark "ENV"
 

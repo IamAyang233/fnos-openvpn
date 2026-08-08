@@ -154,6 +154,12 @@ func (cfg *VPNConfig) Update(key string, val string) {
 	case "openvpn.ovpn_port":
 		cfg.Set("port", val)
 	case "openvpn.ovpn_proto":
+		// v1.0.69：「IPv6 直连监听」开关 → proto 加 6 后缀（tcp6/udp6）。
+		// fnOS 环境 bindv6only=0，tcp6/udp6 单实例同时监听 IPv4+IPv6（v4-mapped），
+		// 已有 IPv4 客户端不受影响（实测 v4/v6 均连通）。
+		if viper.GetBool("openvpn.ovpn_ipv6_listen") {
+			val += "6"
+		}
 		cfg.Set("proto", val)
 	case "openvpn.ovpn_max_clients":
 		cfg.Set("max-clients", val)
@@ -263,7 +269,12 @@ func (cfg *VPNConfig) Update(key string, val string) {
 				}
 			}
 		} else {
-			cfg.Set("proto", conf.Openvpn.OvpnProto)
+			// v1.0.69：proto 统一带 IPv6 直连监听后缀（ovpn_ipv6_listen=true → tcp6/udp6 双栈监听）。
+			proto := conf.Openvpn.OvpnProto
+			if conf.Openvpn.OvpnIpv6Listen {
+				proto += "6"
+			}
+			cfg.Set("proto", proto)
 			cfg.Delete("server-ipv6")
 
 			getCmd := privExec(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", conf.Openvpn.OvpnSubnet6, "-j", "MASQUERADE")
