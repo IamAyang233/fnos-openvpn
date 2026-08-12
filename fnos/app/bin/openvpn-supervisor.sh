@@ -12,7 +12,18 @@ mark "RUN_START"
 mark "AFTER_RM"
 
 : "${TRIM_APPNAME:=openvpn}"
-: "${TRIM_PKGVAR:=/vol2/@appdata/openvpn}"
+# v1.0.76：TRIM_PKGVAR 兜底自推断（防框架未注入时落死 /vol2，导致非 vol2 部署机器用不了）。
+# 优先级：保持框架注入值 > 脚本真实路径推导（pwd -P 取卷号）→ 最后才回退 /vol2。
+# 正常由 fnOS 框架注入 TRIM_PKGVAR（= /vol{n}/@appdata/openvpn），此分支仅作防御性兜底。
+if [ -z "${TRIM_PKGVAR:-}" ]; then
+    _SB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P 2>/dev/null)"
+    _VOL="$(echo "${_SB}" | sed -n 's|^/vol\([0-9][0-9]*\)/.*|\1|p')"
+    if [ -n "${_VOL}" ] && [ -d "/vol${_VOL}/@appdata/openvpn" ]; then
+        TRIM_PKGVAR="/vol${_VOL}/@appdata/openvpn"
+    else
+        TRIM_PKGVAR="/vol2/@appdata/openvpn"
+    fi
+fi
 : "${TRIM_APPDEST:=/var/apps/openvpn}"
 
 ETC="${TRIM_PKGVAR}/etc"
@@ -88,6 +99,15 @@ kill_stale() {
 kill_stale
 mark "STALE_CLEANED"
 
+# 日志防爆：web_out.log 是追加模式永不截断，长期运行撑爆磁盘 → sqlite 写失败
+# （"web 改东西失败"的真正来源）。vpn_out.log 虽每次重启截断，也统一保护。
+# 超过 10MB 截断；截断后属主不变，运行中的进程 fd 仍可继续写入。
+trim_log() {
+    local f="$1" max="${2:-10485760}"
+    [ -f "$f" ] || return 0
+    [ "$(stat -c %s "$f" 2>/dev/null || echo 0)" -gt "$max" ] && : > "$f" 2>/dev/null || true
+}
+
 # 关键自检：openvpn-web 二进制是否可执行存在（缺失会触发 code 127）
 if [ -x "${APP_BIN_DIR}/openvpn-web" ]; then
     mark "BIN_OK"
@@ -121,6 +141,7 @@ run_web() {
     chown nobody:nogroup "${ETC}/web_out.log" "${ETC}/web.pid" 2>/dev/null || true
     while true; do
         mark "WEBLOOP_TICK"
+        trim_log "${ETC}/web_out.log"
         runuser -u nobody --preserve-environment -- "${APP_BIN_DIR}/openvpn-web" >>"${ETC}/web_out.log" 2>&1 &
         local pid=$!
         echo "$pid" > "${ETC}/web.pid"
@@ -141,6 +162,7 @@ run_web() {
 run_vpn() {
     while true; do
         mark "VPNLOOP_TICK"
+        trim_log "${ETC}/vpn_out.log"
         "${APP_BIN_DIR}/openvpn" --config "${CONF}" >"${ETC}/vpn_out.log" 2>&1 &
         local pid=$!
         echo "$pid" > "${ETC}/vpn.pid"

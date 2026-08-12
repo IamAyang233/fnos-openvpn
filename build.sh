@@ -3,6 +3,10 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FNOS_DIR="${FNOS_DIR:-$SCRIPT_DIR/fnos}"
+# 归一化为绝对路径：否则传入相对 FNOS_DIR 时，BIN_OUT 也变相对，
+# 而 go build 在 (cd openvpn-web-src && ...) 子shell 内用 -o 写相对路径会落错目录
+# （落到 openvpn-web-src/fnos_xxx/...），后续校验找不到产物而误报“不是 ELF”。
+FNOS_DIR="$(cd "$FNOS_DIR" 2>/dev/null && pwd)" || error "FNOS_DIR 不存在: $FNOS_DIR"
 
 # Go 工具链版本锁定：go.mod 声明 go 1.25.4，本机若装了更高版本 Go（如 1.26+）
 # 会因 std 包内部结构变化报 "package ... is not in std" 编译失败。
@@ -14,6 +18,9 @@ if [ -x "${TC_BIN}/go.exe" ] || [ -x "${TC_BIN}/go" ]; then
     TC_ROOT_WIN="$(echo "${HOME}/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.4.windows-amd64" | sed 's|^/\([a-zA-Z]\)/|\1:/|')"
     export GOROOT="${TC_ROOT_WIN}"
     export PATH="${TC_BIN}:${PATH}"
+    # 必须锁定 GOTOOLCHAIN：否则默认 auto 模式在交叉编译(arm64)时会漂到系统 Go(1.26.5)，
+    # 出现 "version go1.25.4 does not match go tool version go1.26.5" 编译失败（x86 偶然不触发）。
+    export GOTOOLCHAIN=go1.25.4
     echo "[INFO] 使用本地 Go toolchain 1.25.4 (GOROOT=${TC_ROOT_WIN})"
 else
     export GOTOOLCHAIN=go1.25.4
@@ -94,11 +101,13 @@ else
 fi
 ( cd "$SCRIPT_DIR/openvpn-web-src" && GOFLAGS=-mod=mod CGO_ENABLED=0 GOOS=linux GOARCH=$GOARCH_VAL go build -trimpath -buildvcs=false -a -ldflags "-X main.version=$VERSION" -o "$BIN_OUT_WIN" . ) || error "go build openvpn-web 失败"
 # 产物校验：必须为 Linux ELF（Windows 交叉编译经典翻车：不带 GOOS 会产出 PE，装回 NAS 卡 start）
+# 注意：校验必须用 Windows 原生路径 BIN_OUT_WIN（而非 MSYS 的 /d/... 含非 ASCII 目录名），
+# 否则 file 读不到该路径会误报“不是 ELF”而中止打包（实为编译成功，误报）。python 兜底分支同理。
 if command -v file >/dev/null 2>&1; then
-    if ! file "$BIN_OUT" 2>/dev/null | grep -q "ELF 64-bit"; then
+    if ! file "$BIN_OUT_WIN" 2>/dev/null | grep -q "ELF 64-bit"; then
         error "openvpn-web 不是 Linux ELF（交叉编译失败），终止打包"
     fi
-    info "编译产物校验通过: $(file "$BIN_OUT" | cut -d: -f2 | cut -c1-40)"
+    info "编译产物校验通过: $(file "$BIN_OUT_WIN" | cut -d: -f2 | cut -c1-40)"
 else
     # file 命令不可用（精简 Git Bash），用 python 检查 ELF magic + 架构
     BIN_OUT_WIN_CHECK="$(echo "$BIN_OUT" | sed 's|^/\([a-zA-Z]\)/|\1:/|')"

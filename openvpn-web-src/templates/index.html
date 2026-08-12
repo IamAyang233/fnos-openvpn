@@ -15,6 +15,7 @@
     <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></symbol>
     <symbol id="i-client" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
     <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></symbol>
+    <symbol id="i-group" viewBox="0 0 24 24"><circle cx="8" cy="8" r="3.2"/><circle cx="16" cy="9" r="2.4"/><path d="M2 19c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M14.5 14.4c2.7-.3 7.5 1.3 7.5 5.6"/></symbol>
     <symbol id="i-cert" viewBox="0 0 24 24"><circle cx="12" cy="9" r="6"/><path d="M9 14l-2 7 5-3 5 3-2-7"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11.5v4.5"/><path d="M12 8h.01"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
@@ -54,6 +55,7 @@
         <a class="nav-item active" data-screen="dashboard" href="#"><svg class="icon"><use href="#i-dash"/></svg><span class="nav-label">仪表盘</span></a>
         <a class="nav-item" data-screen="clients" href="#"><svg class="icon"><use href="#i-client"/></svg><span class="nav-label">客户端</span></a>
         <a class="nav-item" data-screen="users" href="#"><svg class="icon"><use href="#i-user"/></svg><span class="nav-label">用户</span></a>
+        <a class="nav-item" data-screen="groups" href="#"><svg class="icon"><use href="#i-group"/></svg><span class="nav-label">分组</span></a>
         <a class="nav-item" data-screen="certs" href="#"><svg class="icon"><use href="#i-cert"/></svg><span class="nav-label">证书</span></a>
         <a class="nav-item" data-screen="history" href="#"><svg class="icon"><use href="#i-history"/></svg><span class="nav-label">连接记录</span></a>
         <a class="nav-item" data-screen="settings" href="#"><svg class="icon"><use href="#i-gear"/></svg><span class="nav-label">设置</span></a>
@@ -178,6 +180,19 @@
         </div>
       </section>
 
+      <!-- Groups -->
+      <section data-panel="groups" hidden>
+        <div class="section-head"><h2>分组</h2><div class="spacer"></div><button class="btn btn-primary btn-sm" id="addGroupBtn"><svg class="icon icon-sm"><use href="#i-plus"/></svg>添加分组</button></div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>名称</th><th>上级分组</th><th>配置（下发到客户端）</th><th style="text-align:right">操作</th></tr></thead>
+              <tbody id="groupsTbody"><tr><td colspan="4" class="empty">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <!-- Certs -->
       <section data-panel="certs" hidden>
         <div class="section-head"><h2>证书</h2><div class="spacer"></div><button class="btn btn-sm" id="certManageBtn"><svg class="icon icon-sm"><use href="#i-gear"/></svg>证书管理</button></div>
@@ -292,6 +307,7 @@
                 附带系统日志
               </label>
               <div class="hint">勾选后将附上应用版本、服务端协议及 Web 后端 / 辅助脚本日志（含错误上下文，约 1000 行上限），便于排查；日志中不含密码与密钥。</div>
+              <div class="hint" style="color:#e5484d;margin-top:6px">交流QQ群：511725692</div>
             </div>
             <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:6px">
               <button class="btn btn-primary" id="fbSubmit"><svg class="icon icon-sm"><use href="#i-send"/></svg>提交反馈</button>
@@ -436,6 +452,57 @@
     <div class="modal-foot">
       <button class="btn" id="addUserCancel">取消</button>
       <button class="btn btn-primary" id="addUserSave">添加</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit group modal -->
+<div class="overlay" id="editGroupModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="editGroupTitle">
+    <div class="modal-head"><h3 id="editGroupTitle">编辑分组</h3><button class="icon-btn" aria-label="关闭" id="editGroupClose" style="margin-left:auto"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="modal-body">
+      <input type="hidden" id="egId" />
+      <div class="field"><label>名称</label><input class="input" id="egName" placeholder="分组名称" autocomplete="off" /></div>
+      <div class="field"><label>上级分组</label><select class="input" id="egParent"></select><div class="hint">新建分组需挂在某个上级分组下；配置会从上级逐级继承并叠加下发到客户端。</div></div>
+      <div class="field">
+        <label>配置（下发到客户端的 OpenVPN 指令）</label>
+        <div class="ovcfg-presets" id="egPresets"><!-- 常用场景预设由 JS 注入 --></div>
+        <details class="ovcfg-custom">
+          <summary>自定义指令（高级）</summary>
+          <textarea class="input" id="egConfig" rows="5" placeholder="多条指令换行分隔，例如 push &quot;route 10.0.0.0 255.255.255.0&quot;"></textarea>
+        </details>
+        <div class="hint">勾选常用场景即可（配置会随上级分组逐级继承叠加）；需要更细控制时，展开上方「自定义指令」写任意 OpenVPN 指令。</div>
+        <div class="ovcfg-preview">
+          <div class="ovcfg-preview-title">实际下发指令（预览）</div>
+          <pre id="egConfigPreview" class="mono"></pre>
+        </div>
+      </div>
+      <div class="err" id="egErr"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="editGroupCancel">取消</button>
+      <button class="btn btn-primary" id="editGroupSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Group members modal -->
+<div class="overlay" id="groupMembersModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="groupMembersTitle">
+    <div class="modal-head"><h3 id="groupMembersTitle">分组成员</h3><button class="icon-btn" aria-label="关闭" id="groupMembersClose" style="margin-left:auto"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="modal-body">
+      <div class="field"><label id="gmGroupName" style="font-weight:600"></label></div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>用户名</th><th>姓名</th><th>状态</th><th>在线</th><th>累计下载</th><th>累计上传</th></tr></thead>
+          <tbody id="gmTbody"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="err" id="gmErr"></div>
+    </div>
+    <div class="modal-foot">
+      <span style="flex:1"></span>
+      <button class="btn" id="groupMembersCancel">关闭</button>
     </div>
   </div>
 </div>

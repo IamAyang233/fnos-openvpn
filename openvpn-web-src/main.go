@@ -111,7 +111,7 @@ type ovpn struct {
 }
 
 var (
-	version = "1.0.0"
+	version = "1.0.70"
 	//go:embed templates
 	FS embed.FS
 
@@ -133,10 +133,13 @@ var (
 	reInfoLine = regexp.MustCompile(">INFO(.)*\r\n")
 )
 
-// protoLineRe / remotePortRe：下载客户端配置时动态修正协议与端口（v1.0.58）。
+// protoLineRe / remotePortRe / remoteHostRe：下载客户端配置时动态修正协议、端口与主机地址。
+// protoLineRe / remotePortRe 在 v1.0.58 引入（修正协议/端口）；remoteHostRe 在 v1.0.69 引入，
+// 按 system.base.server_addr 重写 remote 主机，使“改服务器地址 → 重下载”自动生效。
 var (
 	protoLineRe  = regexp.MustCompile(`(?m)^proto .*$`)
 	remotePortRe = regexp.MustCompile(`(?m)^remote (\S+) \d+$`)
+	remoteHostRe = regexp.MustCompile(`(?m)^remote \S+ (\d+)$`)
 )
 
 // feedbackAPI 返回 PanDa 更新服务根地址（v1.0.68 起默认公网域名）。
@@ -600,6 +603,46 @@ func getCerts(ovData string) []CertData {
 // isValidPassword 密码策略（v1.0.40 按用户要求放宽）：管理员/用户密码统一至少 8 位即可。
 func isValidPassword(pw string) bool {
 	return len(pw) >= 8
+}
+
+// isValidServerAddr 校验“服务器地址”：允许 IPv4 / IPv6 / 合法域名(FQDN)。
+// 此前用户把 nas.aykeji.cn 输成 nas.aykeji,cn（逗号），导致 DNS 解析失败、
+// 客户端报“协议选择失败”。这里拒绝空格/逗号/中文标点等非法字符，避免手输错。
+// IPv6 允许带或不带 []；host:port 形式（含冒号但非合法 IPv6）一律拒绝——端口是独立字段。
+func isValidServerAddr(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	// 拒绝任何空白字符
+	if strings.ContainsAny(s, " \t\r\n") {
+		return false
+	}
+	// IPv4
+	if net.ParseIP(s) != nil && !strings.Contains(s, ":") {
+		return true
+	}
+	// IPv6（允许带或不带 []）
+	if strings.Contains(s, ":") {
+		ip6 := s
+		if strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]") {
+			ip6 = s[1 : len(s)-1]
+		}
+		return net.ParseIP(ip6) != nil
+	}
+	// 域名/FQDN：RFC 1123 标签（字母数字开头结尾，中间可含连字符）+ 点分隔。
+	// 仅允许 [a-zA-Z0-9-.]，逗号 / 空格 / 中文等非法字符自然被拒。
+	hostRe := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
+	return hostRe.MatchString(s)
+}
+
+// isValidPort 校验 OpenVPN 监听端口：1–65535 的整数。
+func isValidPort(s string) bool {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || n < 1 || n > 65535 {
+		return false
+	}
+	return true
 }
 
 func genRandomString(length int) string {
@@ -1079,12 +1122,24 @@ func main() {
 					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 					return
 				}
-			case "openvpn.ovpn_push_dns1", "openvpn.ovpn_push_dns2":
-				if net.ParseIP(val) == nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "invalid IP address: " + val})
-					return
-				}
+		case "openvpn.ovpn_push_dns1", "openvpn.ovpn_push_dns2":
+			if net.ParseIP(val) == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "invalid IP address: " + val})
+				return
 			}
+		case "system.base.server_addr":
+			// v1.0.70：服务器地址合法性校验，拒绝逗号/空格/非法字符（如 nas.aykeji,cn 笔误）
+			if !isValidServerAddr(val) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "服务器地址格式不正确（仅支持 IPv4 / IPv6 / 域名，且不能含空格、逗号等非法字符）"})
+				return
+			}
+		case "openvpn.ovpn_port":
+			// v1.0.70：端口合法性校验，必须是 1–65535 的整数
+			if !isValidPort(val) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "端口必须是 1–65535 之间的整数"})
+				return
+			}
+		}
 
 			switch val {
 			case "true":
@@ -1910,18 +1965,28 @@ func main() {
 				return
 			}
 
-			// v1.0.58：磁盘 .ovpn 是添加客户端时的配置，改协议/端口后不会自动更新，
-			// 旧配置（如 proto udp）与服务端（tcp）不匹配会导致客户端连不上。
-			// 下载时按当前 config.json 动态修正 proto 与 remote 端口。
-			content := string(data)
-			if proto := viper.GetString("openvpn.ovpn_proto"); proto != "" {
-				content = protoLineRe.ReplaceAllString(content, "proto "+proto)
+		// v1.0.58：磁盘 .ovpn 是添加客户端时的配置，改协议/端口后不会自动更新，
+		// 旧配置（如 proto udp）与服务端（tcp）不匹配会导致客户端连不上。
+		// 下载时按当前 config.json 动态修正 proto 与 remote 端口。
+		// v1.0.69：额外按 system.base.server_addr 重写 remote 主机，使“改服务器地址 →
+		// 重下载”自动生效，无需删除客户端重加（IPv6 地址自动加 []，与 genclient 一致）。
+		content := string(data)
+		if proto := viper.GetString("openvpn.ovpn_proto"); proto != "" {
+			content = protoLineRe.ReplaceAllString(content, "proto "+proto)
+		}
+		if port := viper.GetString("openvpn.ovpn_port"); port != "" {
+			content = remotePortRe.ReplaceAllString(content, "remote $1 "+port)
+		}
+		if addr := strings.TrimSpace(viper.GetString("system.base.server_addr")); addr != "" {
+			// IPv6 地址必须加 []（OpenVPN 客户端语法），IPv4 不受影响（与 ovpn-helper.sh genclient 一致）
+			if strings.Contains(addr, ":") && !strings.HasPrefix(addr, "[") {
+				addr = "[" + addr + "]"
 			}
-			if port := viper.GetString("openvpn.ovpn_port"); port != "" {
-				content = remotePortRe.ReplaceAllString(content, "remote $1 "+port)
-			}
+			// remoteHostRe 捕获端口（组1），仅替换主机，保留已修正的端口
+			content = remoteHostRe.ReplaceAllString(content, "remote "+addr+" $1")
+		}
 
-			c.JSON(http.StatusOK, gin.H{"content": content})
+		c.JSON(http.StatusOK, gin.H{"content": content})
 		})
 
 		ovpn.PUT("/client/:name/ccd", func(c *gin.Context) {

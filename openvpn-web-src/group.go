@@ -66,6 +66,28 @@ func (g *Group) Update() error {
 }
 
 func (g *Group) Delete(id string) error {
+	// 取出待删分组，禁止删除 Default 根分组
+	var target Group
+	if err := db.First(&target, id).Error; err != nil {
+		return err
+	}
+	if target.Name == "Default" {
+		return errors.New("Default 根分组不可删除")
+	}
+	// 找到 Default 根分组，作为成员与子分组的归处
+	var def Group
+	if err := db.Where("name = ?", "Default").First(&def).Error; err != nil {
+		return errors.New("未找到 Default 根分组，无法安全删除")
+	}
+	// 把直接成员改挂 Default（不再级联删除用户）
+	if err := db.Model(&User{}).Where("gid = ?", target.ID).Update("gid", def.ID).Error; err != nil {
+		return err
+	}
+	// 把直接子分组改挂 Default，避免产生孤儿分组
+	if err := db.Model(&Group{}).Where("parent_id = ?", target.ID).Update("parent_id", def.ID).Error; err != nil {
+		return err
+	}
+	// 此时该分组已无直接成员与子分组依赖，可安全硬删除
 	result := db.Unscoped().Delete(&Group{}, id)
 	return result.Error
 }

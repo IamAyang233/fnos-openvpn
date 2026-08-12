@@ -3,6 +3,7 @@
 
 # 二进制编译产物（Go 编译生成，build.sh 会重新构建）
 fnos/app/bin/openvpn-web
+openvpn-web-src/openvpn-web*
 openvpn-web-src/build_err.txt
 openvpn-web-src/build_arm64*
 

@@ -136,7 +136,7 @@
   if (window.innerWidth <= 920) app.classList.add('collapsed');
 
   /* ---------- 导航切换 ---------- */
-  var titleMap = { dashboard: '仪表盘', clients: '客户端', users: '用户', certs: '证书', history: '连接记录', settings: '设置' };
+  var titleMap = { dashboard: '仪表盘', clients: '客户端', users: '用户', groups: '分组', certs: '证书', history: '连接记录', settings: '设置' };
   function showPanel(s) {
     document.querySelectorAll('.nav-item').forEach(function (n) { n.classList.toggle('active', n.dataset.screen === s); });
     document.querySelectorAll('[data-panel]').forEach(function (p) { p.hidden = p.dataset.panel !== s; });
@@ -145,6 +145,7 @@
     if (s === 'dashboard') loadDashboard();
     else if (s === 'clients') loadClients();
     else if (s === 'users') loadUsers();
+    else if (s === 'groups') loadGroups();
     else if (s === 'certs') loadCerts();
     else if (s === 'history') loadHistory();
     else if (s === 'settings') loadSettings();
@@ -274,10 +275,34 @@
       $('setGateway').checked = !!ov.ovpn_gateway;
     }).catch(function () {});
   }
+  // v1.0.70：服务器地址 / 端口合法性校验（与后端 POST /settings 保持一致）
+  // 说明：前端只做“便宜且高命中”的拦截（空格/逗号/非法字符/IPv4 八位/域名），
+  // 含冒号的 IPv6 直接放行，交由后端 net.ParseIP 权威校验，避免前端正则误拦合法地址。
+  function isValidServerAddr(s) {
+    s = (s || '').trim();
+    if (!s) return false;
+    if (/\s/.test(s)) return false;            // 拒绝任何空白
+    if (/:/.test(s)) return true;              // IPv6：放行，后端校验
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(s)) {   // IPv4：逐段 0–255
+      return s.split('.').every(function (p) { var n = parseInt(p, 10); return n >= 0 && n <= 255; });
+    }
+    // 域名/FQDN：RFC 1123 标签 + 点分隔，仅允许 [a-zA-Z0-9-.]（逗号/空格/中文等自然被拒）
+    return /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/.test(s);
+  }
+  function isValidPort(s) {
+    s = (s || '').trim();
+    if (!/^\d+$/.test(s)) return false;
+    var n = parseInt(s, 10);
+    return n >= 1 && n <= 65535;
+  }
+
   $('saveSettings').addEventListener('click', function () {
     var addr = $('setAddr').value.trim();
     var port = $('setPort').value.trim();
     var proto = $('setProto').value;
+    // v1.0.70：服务器地址 / 端口实时校验，避免手输错（如 nas.aykeji,cn 逗号笔误）
+    if (addr && !isValidServerAddr(addr)) { toast('服务器地址格式不正确（仅支持 IPv4 / IPv6 / 域名，不能含空格、逗号等）'); return; }
+    if (port && !isValidPort(port)) { toast('端口必须是 1–65535 之间的整数'); return; }
     var subnet = $('setSubnet').value.trim();
     var ipv6 = $('setIpv6').checked;
     var ipv6Listen = $('setIpv6Listen').checked;
@@ -535,7 +560,14 @@
       usersById = {};
       var pending = (groups || []).map(function (g) {
         return request.get('/ovpn/group/' + g.id + '/users', { silent: true }).then(function (r) {
-          (r.users || []).forEach(function (u) { all.push(u); usersById[u.id] = u; });
+          // GetUsers 用递归 CTE，查任意分组都会连带返回其所有子孙分组成员，
+          // 因此逐个分组聚合时同一用户可能被多次返回（上级组 + 本级组），
+          // 必须按 id 去重，否则用户列表中会出现重复行。
+          (r.users || []).forEach(function (u) {
+            if (usersById[u.id]) return;
+            usersById[u.id] = u;
+            all.push(u);
+          });
         }).catch(function () {});
       });
       Promise.all(pending).then(function () {
@@ -641,6 +673,265 @@
       .then(function () { toast('已添加用户 ' + u); closeAddUser(); loadUsers(); })
       .catch(function (e) { $('auErr').textContent = (e && e.message) || '添加失败'; });
   };
+
+  /* ---------- 分组管理 ---------- */
+  var groupAll = [], groupById = {};
+  function loadGroups() {
+    request.get('/ovpn/group', { silent: true }).then(function (groups) {
+      groupAll = groups || [];
+      groupById = {};
+      groupAll.forEach(function (g) { groupById[g.id] = g; });
+      renderGroups();
+    }).catch(function () { $('groupsTbody').innerHTML = '<tr><td colspan="4" class="empty">加载失败，请刷新</td></tr>'; });
+  }
+  function groupName(id) {
+    var g = groupById[id];
+    return g ? g.name : '—';
+  }
+  function renderGroups() {
+    var tb = $('groupsTbody');
+    if (!groupAll.length) { tb.innerHTML = '<tr><td colspan="4" class="empty">暂无分组</td></tr>'; return; }
+    tb.innerHTML = groupAll.map(function (g) {
+      var cfg = g.config || '';
+      var preview = cfg ? (cfg.length > 48 ? esc(cfg.slice(0, 48)) + '…' : esc(cfg)) : '<span class="muted">—</span>';
+      var parent = g.parent_id != null ? groupName(g.parent_id) : '（根分组）';
+      return '<tr>' +
+        '<td>' + esc(g.name || '—') + '</td>' +
+        '<td>' + esc(parent) + '</td>' +
+        '<td class="mono" style="max-width:340px;white-space:pre-wrap;word-break:break-all">' + preview + '</td>' +
+        '<td><div class="row-actions" style="justify-content:flex-end">' +
+          '<button class="icon-btn" data-act="members" data-id="' + esc(g.id) + '" title="成员" aria-label="成员"><svg class="icon icon-sm"><use href="#i-user"/></svg></button>' +
+          '<button class="icon-btn" data-act="editgroup" data-id="' + esc(g.id) + '" title="编辑" aria-label="编辑"><svg class="icon icon-sm"><use href="#i-edit"/></svg></button>' +
+          '<button class="icon-btn btn-danger" data-act="delgroup" data-id="' + esc(g.id) + '" title="删除" aria-label="删除"><svg class="icon icon-sm"><use href="#i-trash"/></svg></button>' +
+        '</div></td></tr>';
+    }).join('');
+  }
+  $('groupsTbody').addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-act]'); if (!btn) return;
+    var id = btn.dataset.id, act = btn.dataset.act;
+    if (act === 'members') openGroupMembers(id);
+    else if (act === 'editgroup') openEditGroup(id);
+    else if (act === 'delgroup') {
+      var g = groupById[id];
+      if (!confirm('确认删除分组「' + (g ? g.name : id) + '」？\n该分组的成员将改挂到 Default 分组，子分组也会改挂到 Default，不会删除任何用户。')) return;
+      request.delete('/ovpn/group/' + encodeURIComponent(id)).then(function () { toast('已删除'); loadGroups(); }).catch(function () {});
+    }
+  });
+  function descendantIds(rootId) {
+    // 递归收集 rootId 的所有后代分组 id，用于防止把分组挂到自己的子孙下形成环
+    var out = {}, stack = [rootId];
+    while (stack.length) {
+      var cur = stack.pop();
+      groupAll.forEach(function (g) {
+        if (g.parent_id != null && String(g.parent_id) === String(cur) && !out[g.id]) {
+          out[g.id] = true; stack.push(g.id);
+        }
+      });
+    }
+    return out;
+  }
+  function fillGroupParentSelect(sel, excludeId, allowRoot) {
+    var blocked = descendantIds(excludeId || ''); // 排除自身及所有后代，避免成环
+    if (excludeId) blocked[excludeId] = true;
+    var opts = '';
+    if (allowRoot) opts += '<option value="">（根分组 / 无上级）</option>';
+    opts += groupAll.filter(function (g) { return !blocked[g.id]; }).map(function (g) {
+      return '<option value="' + esc(g.id) + '">' + esc(g.name) + '</option>';
+    }).join('');
+    sel.innerHTML = opts;
+  }
+  function openEditGroup(id) {
+    $('egErr').textContent = '';
+    if (id) {
+      var g = groupById[id];
+      $('editGroupTitle').textContent = '编辑分组';
+      $('egId').value = g.id || '';
+      $('egName').value = g.name || '';
+      egParseConfig(g.config || '');
+      var isRoot = g.parent_id == null;
+      fillGroupParentSelect($('egParent'), g.id, isRoot); // 排除自身及后代，避免成环；根分组可保留为根
+      $('egParent').value = isRoot ? '' : String(g.parent_id);
+    } else {
+      $('editGroupTitle').textContent = '添加分组';
+      $('egId').value = '';
+      $('egName').value = '';
+      egParseConfig('');
+      fillGroupParentSelect($('egParent'), null, false);
+      var def = groupAll.filter(function (g) { return g.name === 'Default'; })[0] || groupAll[0];
+      if (def) $('egParent').value = String(def.id);
+    }
+    $('editGroupModal').hidden = false;
+    $('egName').focus();
+  }
+  function closeEditGroup() { $('editGroupModal').hidden = true; }
+  $('editGroupClose').addEventListener('click', closeEditGroup);
+  $('editGroupCancel').addEventListener('click', closeEditGroup);
+  $('editGroupSave').addEventListener('click', function () {
+    var id = $('egId').value;
+    var name = $('egName').value.trim();
+    if (!name) { $('egErr').textContent = '请填写分组名称'; return; }
+    var rawParent = $('egParent').value;
+    var payload = { name: name, config: egAssembleConfig() };
+    if (rawParent !== '') payload.parent_id = Number(rawParent); // 根分组不发送 parent_id，保留为无上级
+    if (id) {
+      payload.id = id;
+      request.patch('/ovpn/group', payload).then(function (d) {
+        toast(d.message || '已保存'); closeEditGroup(); loadGroups();
+      }).catch(function (e) { $('egErr').textContent = (e && e.message) || '保存失败'; });
+    } else {
+      request.post('/ovpn/group', payload).then(function (d) {
+        toast(d.message || '已添加'); closeEditGroup(); loadGroups();
+      }).catch(function (e) { $('egErr').textContent = (e && e.message) || '添加失败'; });
+    }
+  });
+  $('addGroupBtn').addEventListener('click', function () { openEditGroup(null); });
+
+  // ---- 分组配置：常用场景预设（多选，小白友好） ----
+  // 预设只产出标准 push 指令；自定义框保留任意原始指令，二者拼接为最终 config。
+  var OVC_PRESETS = [
+    {
+      key: 'route', title: '访问内网网段',
+      desc: '让 VPN 客户端能连上你家里的局域网（填写要访问的内网网段与子网掩码）',
+      hasParam: true, defParam: '192.168.0.0 255.255.0.0',
+      build: function (p) { return 'push "route ' + p + '"'; },
+      match: function (line) {
+        var m = line.match(/^\s*push\s+"route\s+([^"]+)"/i) || line.match(/^\s*route\s+([^\s]+)\s+([^\s]+)/i);
+        return m ? (m[2] !== undefined ? m[1] + ' ' + m[2] : m[1]) : null;
+      }
+    },
+    {
+      key: 'dns', title: '下发 DNS',
+      desc: '让客户端使用指定 DNS（建议国内可用地址，如 223.5.5.5，勿用 Google）',
+      hasParam: true, defParam: '223.5.5.5',
+      build: function (p) { return 'push "dhcp-option DNS ' + p + '"'; },
+      match: function (line) {
+        var m = line.match(/^\s*push\s+"dhcp-option\s+DNS\s+([^"]+)"/i) || line.match(/^\s*dhcp-option\s+DNS\s+([^\s]+)/i);
+        return m ? m[1] : null;
+      }
+    },
+    {
+      key: 'redirect', title: '全局代理（所有流量走 VPN）',
+      desc: '客户端所有上网流量都经 VPN 转发；与全局设置叠加，分组无法取消已开启的全局隧道',
+      hasParam: false,
+      build: function () { return 'push "redirect-gateway def1 bypass-dhcp"'; },
+      match: function (line) { return /redirect-gateway/i.test(line) ? '' : null; }
+    },
+    {
+      key: 'blockdns', title: '阻止 DNS 泄漏',
+      desc: 'Windows 客户端专用，防止系统 DNS 绕过 VPN 造成泄露',
+      hasParam: false,
+      build: function () { return 'push "block-outside-dns"'; },
+      match: function (line) { return /block-outside-dns/i.test(line) ? '' : null; }
+    }
+  ];
+
+  // 首次注入预设 DOM（仅一次），并绑定联动事件
+  function egInitPresets() {
+    var box = $('egPresets'); if (!box) return;
+    box.innerHTML = OVC_PRESETS.map(function (p) {
+      var param = p.hasParam
+        ? '<div class="ovcfg-paramwrap"><input class="input ovcfg-param" id="egPresetParam_' + p.key + '" placeholder="' + esc(p.defParam) + '" /></div>'
+        : '';
+      return '<div class="ovcfg-row" data-key="' + p.key + '">' +
+        '<label class="ovcfg-toggle"><input type="checkbox" id="egPreset_' + p.key + '" />' +
+        '<span class="ovcfg-title">' + esc(p.title) + '</span></label>' +
+        '<div class="ovcfg-desc">' + esc(p.desc) + '</div>' + param + '</div>';
+    }).join('');
+    OVC_PRESETS.forEach(function (p) {
+      var cb = $('egPreset_' + p.key);
+      cb.addEventListener('change', function () {
+        var row = cb.closest('.ovcfg-row');
+        row.classList.toggle('on', cb.checked);
+        if (cb.checked && p.hasParam) {
+          var inp = $('egPresetParam_' + p.key);
+          if (!inp.value.trim()) inp.value = p.defParam;
+        }
+        egUpdatePreview();
+      });
+      if (p.hasParam) $('egPresetParam_' + p.key).addEventListener('input', egUpdatePreview);
+    });
+    $('egConfig').addEventListener('input', egUpdatePreview);
+  }
+
+  // 由勾选项 + 自定义框组装最终 config 字符串
+  function egAssembleConfig() {
+    var lines = [];
+    OVC_PRESETS.forEach(function (p) {
+      var cb = $('egPreset_' + p.key);
+      if (cb && cb.checked) {
+        var val = p.hasParam ? $('egPresetParam_' + p.key).value.trim() : '';
+        if (p.hasParam && !val) return; // 参数缺失则跳过该预设
+        lines.push(p.build(val));
+      }
+    });
+    var custom = $('egConfig').value.trim();
+    if (custom) custom.split(/\r?\n/).forEach(function (l) { if (l.trim()) lines.push(l.trim()); });
+    return lines.join('\n');
+  }
+
+  // 实时预览
+  function egUpdatePreview() {
+    var pre = $('egConfigPreview'); if (!pre) return;
+    var cfg = egAssembleConfig();
+    pre.textContent = cfg || '（未配置，客户端仅继承上级分组与全局设置）';
+    pre.classList.toggle('empty', !cfg);
+  }
+
+  // 打开弹窗时：把已有 config 解析回填到预设 + 自定义框（保证旧数据不丢）
+  function egParseConfig(cfg) {
+    var lines = (cfg || '').split(/\r?\n/);
+    var remaining = [];
+    OVC_PRESETS.forEach(function (p) {
+      var found = false, param = '';
+      for (var i = 0; i < lines.length; i++) {
+        var m = p.match(lines[i]);
+        if (m !== null) { found = true; param = p.hasParam ? m : ''; break; }
+      }
+      var cb = $('egPreset_' + p.key);
+      if (cb) {
+        cb.checked = found;
+        cb.closest('.ovcfg-row').classList.toggle('on', found);
+        if (found && p.hasParam) $('egPresetParam_' + p.key).value = param || p.defParam;
+        else if (!found && p.hasParam) $('egPresetParam_' + p.key).value = '';
+      }
+    });
+    lines.forEach(function (l) {
+      if (!l.trim()) return;
+      var matched = OVC_PRESETS.some(function (p) { return p.match(l) !== null; });
+      if (!matched) remaining.push(l.trim());
+    });
+    $('egConfig').value = remaining.join('\n');
+    egUpdatePreview();
+  }
+
+  egInitPresets();
+
+  function openGroupMembers(id) {
+    var g = groupById[id];
+    $('gmGroupName').textContent = '分组：' + (g ? g.name : id) + (g && g.config ? '（含继承自上级的配置）' : '');
+    $('gmErr').textContent = '';
+    var tb = $('gmTbody');
+    tb.innerHTML = '<tr><td colspan="6" class="empty">加载中…</td></tr>';
+    $('groupMembersModal').hidden = false;
+    request.get('/ovpn/group/' + encodeURIComponent(id) + '/users', { silent: true }).then(function (r) {
+      var users = (r && r.users) || [];
+      if (!users.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">该分组暂无成员</td></tr>'; return; }
+      tb.innerHTML = users.map(function (u) {
+        var on = u.isEnable;
+        return '<tr>' +
+          '<td>' + esc(u.username || '—') + '</td>' +
+          '<td>' + esc(u.name || '—') + '</td>' +
+          '<td><span class="badge ' + (on ? 'on' : 'off') + '"><span class="dot"></span>' + (on ? '启用' : '禁用') + '</span></td>' +
+          '<td>' + (u.online ? '<span class="badge on"><span class="dot"></span>在线</span>' : '<span class="badge off"><span class="dot"></span>离线</span>') + '</td>' +
+          '<td>' + fmtBytes(u.recvBytes) + '</td>' +
+          '<td>' + fmtBytes(u.sendBytes) + '</td>' +
+        '</tr>';
+      }).join('');
+    }).catch(function (e) { $('gmErr').textContent = (e && e.message) || '加载失败'; });
+  }
+  function closeGroupMembers() { $('groupMembersModal').hidden = true; }
+  $('groupMembersClose').addEventListener('click', closeGroupMembers);
+  $('groupMembersCancel').addEventListener('click', closeGroupMembers);
 
   /* ---------- 证书 ---------- */
   var certCache = {};
