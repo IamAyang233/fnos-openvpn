@@ -165,12 +165,17 @@ func (cfg *VPNConfig) Update(key string, val string) {
 		cfg.Set("max-clients", val)
 	case "openvpn.ovpn_subnet":
 		oldSubnet := cfg.Get("server")
-		ip, ipnet, err := net.ParseCIDR(val)
+		_, ipnet, err := net.ParseCIDR(val)
 		if err != nil {
 			logger.Error(context.Background(), err.Error())
 			return
 		}
-		val = fmt.Sprintf("%s %s", ip.String(), net.IP(ipnet.Mask).String())
+		// v1.0.78：OpenVPN --server 第一个参数必须是网段地址（主机位全 0）。
+		// ParseCIDR 返回的 ipnet.IP 已把主机位归零（192.168.31.1/24 → 192.168.31.0），
+		// 而 ip 保留原始主机位（192.168.31.1）。旧代码用 ip.String() 会写出
+		// `server 192.168.31.1 255.255.255.0` → Options error: network/netmask combination is invalid
+		// → openvpn 启动即退出。必须用 ipnet.IP.String()（网段地址）。
+		val = fmt.Sprintf("%s %s", ipnet.IP.String(), net.IP(ipnet.Mask).String())
 		cfg.Set("server", val)
 
 		ipt := "iptables-nft"

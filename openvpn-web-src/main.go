@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"crypto/x509"
 	"embed"
@@ -14,7 +15,6 @@ import (
 	"io"
 	"io/fs"
 	"log"
-	"crypto/rand"
 	"net"
 	"net/http"
 	"os"
@@ -56,6 +56,7 @@ type ClientData struct {
 
 type ServerData struct {
 	RunDate    string
+	RunUnix    int64
 	Status     string
 	StatusDesc string
 	Address    string
@@ -364,6 +365,7 @@ func (ov *ovpn) getServer() ServerData {
 	if len(sateSlice) >= 3 {
 		runDate, _ := strconv.ParseInt(sateSlice[0], 10, 64)
 		sd.RunDate = time.Unix(runDate, 0).Format("2006-01-02 15:04:05")
+		sd.RunUnix = runDate
 		sd.Status = sateSlice[1]
 		sd.StatusDesc = sateSlice[2]
 		sd.Address = sateSlice[3]
@@ -1069,11 +1071,11 @@ func main() {
 			}
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"init_done":     initDone,
-			"server_addr":   viper.GetString("system.base.server_addr"),
-			"admin_username": viper.GetString("system.base.admin_username"),
-			"ovpn_port":     viper.GetString("openvpn.ovpn_port"),
-			"ovpn_proto":    viper.GetString("openvpn.ovpn_proto"),
+			"init_done":        initDone,
+			"server_addr":      viper.GetString("system.base.server_addr"),
+			"admin_username":   viper.GetString("system.base.admin_username"),
+			"ovpn_port":        viper.GetString("openvpn.ovpn_port"),
+			"ovpn_proto":       viper.GetString("openvpn.ovpn_proto"),
 			"ovpn_ipv6_listen": viper.GetBool("openvpn.ovpn_ipv6_listen"),
 		})
 	})
@@ -1128,29 +1130,48 @@ func main() {
 					}
 				}
 			case "openvpn.ovpn_subnet", "openvpn.ovpn_subnet6":
-				_, _, err := net.ParseCIDR(val)
+				ip, ipnet, err := net.ParseCIDR(val)
 				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+					c.JSON(http.StatusBadRequest, gin.H{"message": "子网格式不正确：" + val + "（应为 CIDR，如 10.8.0.0/24 或 fdaf:f178:e916:6dd0::/64）"})
 					return
 				}
-		case "openvpn.ovpn_push_dns1", "openvpn.ovpn_push_dns2":
-			if net.ParseIP(val) == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "invalid IP address: " + val})
-				return
+				// v1.0.79：合法性校验——OpenVPN --server 只接受网段地址（主机位全 0）。
+				// 填网关 IP（192.168.31.1/24）格式合法但 OpenVPN 启动即报
+				// Options error: --server directive network/netmask combination is invalid → 启动失败。
+				if !ip.Equal(ipnet.IP) {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "子网必须是网段地址（主机位全 0），如 192.168.31.0/24；不要填网关 IP（如 192.168.31.1/24）"})
+					return
+				}
+			case "openvpn.ovpn_push_dns1", "openvpn.ovpn_push_dns2":
+				if net.ParseIP(val) == nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "invalid IP address: " + val})
+					return
+				}
+			case "system.base.server_addr":
+				// v1.0.70：服务器地址合法性校验，拒绝逗号/空格/非法字符（如 nas.aykeji,cn 笔误）
+				if !isValidServerAddr(val) {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "服务器地址格式不正确（仅支持 IPv4 / IPv6 / 域名，且不能含空格、逗号等非法字符）"})
+					return
+				}
+			case "openvpn.ovpn_port":
+				// v1.0.70：端口合法性校验，必须是 1–65535 的整数
+				if !isValidPort(val) {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "端口必须是 1–65535 之间的整数"})
+					return
+				}
+			case "openvpn.ovpn_proto":
+				// v1.0.80：协议白名单校验——非法 proto 会写进 server.conf 导致 OpenVPN 启动失败
+				if val != "udp" && val != "tcp" {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "协议仅支持 udp 或 tcp"})
+					return
+				}
+			case "openvpn.ovpn_ipv6", "openvpn.ovpn_ipv6_listen", "openvpn.ovpn_gateway":
+				// v1.0.80：布尔开关白名单校验，防止 API 直写非 true/false 值污染 config.json
+				if val != "true" && val != "false" {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "开关仅支持 true/false"})
+					return
+				}
 			}
-		case "system.base.server_addr":
-			// v1.0.70：服务器地址合法性校验，拒绝逗号/空格/非法字符（如 nas.aykeji,cn 笔误）
-			if !isValidServerAddr(val) {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "服务器地址格式不正确（仅支持 IPv4 / IPv6 / 域名，且不能含空格、逗号等非法字符）"})
-				return
-			}
-		case "openvpn.ovpn_port":
-			// v1.0.70：端口合法性校验，必须是 1–65535 的整数
-			if !isValidPort(val) {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "端口必须是 1–65535 之间的整数"})
-				return
-			}
-		}
 
 			switch val {
 			case "true":
@@ -1279,6 +1300,13 @@ func main() {
 				}
 			case "renewCert":
 				day := c.PostForm("day")
+
+				// v1.0.80：续期天数合法性校验（正整数 1–3650），防止非法值传给 helper 导致 openssl 失败
+				nDay, err := strconv.Atoi(day)
+				if err != nil || nDay < 1 || nDay > 3650 {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "续期天数必须是 1–3650 之间的整数"})
+					return
+				}
 
 				cmd := privExec(ovpnHelper, "renewcert", day)
 				if out, err := cmd.CombinedOutput(); err != nil {
@@ -1412,32 +1440,32 @@ func main() {
 			}
 
 			users := g.GetUsers(gid)
-		// 累计流量 = 历史会话汇总 + 当前在线会话实时值（下线后不归零）
-		histUser := History{}.TrafficByUsername()
-		for i := range users {
-			if t, ok := histUser[users[i].Username]; ok {
-				users[i].RecvBytes = t.Recv
-				users[i].SendBytes = t.Sent
-			}
-		}
-
-		// 关联在线流量：按用户名匹配当前连接的客户端，累计收发字节
-		if online := ov.getClient(); len(online) > 0 {
-			byUser := make(map[string]ClientData, len(online))
-			for _, c := range online {
-				if c.Username != "" {
-					byUser[c.Username] = c
-				}
-			}
+			// 累计流量 = 历史会话汇总 + 当前在线会话实时值（下线后不归零）
+			histUser := History{}.TrafficByUsername()
 			for i := range users {
-				if c, ok := byUser[users[i].Username]; ok {
-					users[i].RecvBytes += c.RecvBytes
-					users[i].SendBytes += c.SendBytes
-					users[i].Online = true
+				if t, ok := histUser[users[i].Username]; ok {
+					users[i].RecvBytes = t.Recv
+					users[i].SendBytes = t.Sent
 				}
 			}
-		}
-		c.JSON(http.StatusOK, gin.H{"users": users, "authUser": auth})
+
+			// 关联在线流量：按用户名匹配当前连接的客户端，累计收发字节
+			if online := ov.getClient(); len(online) > 0 {
+				byUser := make(map[string]ClientData, len(online))
+				for _, c := range online {
+					if c.Username != "" {
+						byUser[c.Username] = c
+					}
+				}
+				for i := range users {
+					if c, ok := byUser[users[i].Username]; ok {
+						users[i].RecvBytes += c.RecvBytes
+						users[i].SendBytes += c.SendBytes
+						users[i].Online = true
+					}
+				}
+			}
+			c.JSON(http.StatusOK, gin.H{"users": users, "authUser": auth})
 		})
 
 		ovpn.POST("/group", func(c *gin.Context) {
@@ -1556,24 +1584,24 @@ func main() {
 
 				db.ScanRows(rows, &u)
 
-			enable := "0"
-			if u.IsEnable {
-				enable = "1"
-			}
+				enable := "0"
+				if u.IsEnable {
+					enable = "1"
+				}
 
-			record := []string{
-				strconv.Itoa(int(u.ID)),
-				u.Username,
-				"******", // 密码脱敏，不导出明文
-				u.Name,
-				g.Get(strconv.Itoa(int(u.Gid))).Name,
-				enable,
-				u.ExpireDate,
-				u.IpAddr,
-				u.OvpnConfig,
-				"", // MFA 密钥不导出
-				u.CreatedAt.Format("2006-01-02 15:04:05"),
-			}
+				record := []string{
+					strconv.Itoa(int(u.ID)),
+					u.Username,
+					"******", // 密码脱敏，不导出明文
+					u.Name,
+					g.Get(strconv.Itoa(int(u.Gid))).Name,
+					enable,
+					u.ExpireDate,
+					u.IpAddr,
+					u.OvpnConfig,
+					"", // MFA 密钥不导出
+					u.CreatedAt.Format("2006-01-02 15:04:05"),
+				}
 
 				if err := writer.Write(record); err != nil {
 					logger.Error(context.Background(), err.Error())
@@ -1883,45 +1911,45 @@ func main() {
 				clients = append(clients, f)
 			}
 
-		sort.Slice(clients, func(i, j int) bool {
-			return clients[i].Date < clients[j].Date
-		})
+			sort.Slice(clients, func(i, j int) bool {
+				return clients[i].Date < clients[j].Date
+			})
 
-		// 累计流量 = 历史会话汇总(history 表) + 当前在线会话实时值。
-		// 这样客户端下线后统计不会归零，仍展示历史累计。
-		hist := History{}.TrafficByCommonName()
-		for i := range clients {
-			if t, ok := hist[clients[i].Name]; ok {
-				clients[i].RecvBytes = t.Recv
-				clients[i].SendBytes = t.Sent
-				clients[i].Vip = t.Vip
-				if t.LastSeen > 0 {
-					clients[i].LastSeen = time.Unix(t.LastSeen, 0).Format("2006-01-02 15:04:05")
-				}
-			}
-		}
-
-		// 关联在线流量：客户端文件名(去扩展) == 证书 CN == getClient().CommonName
-		if online := ov.getClient(); len(online) > 0 {
-			byCN := make(map[string]ClientData, len(online))
-			for _, c := range online {
-				byCN[c.CommonName] = c
-			}
+			// 累计流量 = 历史会话汇总(history 表) + 当前在线会话实时值。
+			// 这样客户端下线后统计不会归零，仍展示历史累计。
+			hist := History{}.TrafficByCommonName()
 			for i := range clients {
-				if c, ok := byCN[clients[i].Name]; ok {
-					clients[i].RecvBytes += c.RecvBytes
-					clients[i].SendBytes += c.SendBytes
-					clients[i].Vip = c.Vip
-					clients[i].Vip6 = c.Vip6
-					clients[i].LastSeen = c.ConnDate
-					clients[i].Online = true
+				if t, ok := hist[clients[i].Name]; ok {
+					clients[i].RecvBytes = t.Recv
+					clients[i].SendBytes = t.Sent
+					clients[i].Vip = t.Vip
+					if t.LastSeen > 0 {
+						clients[i].LastSeen = time.Unix(t.LastSeen, 0).Format("2006-01-02 15:04:05")
+					}
 				}
 			}
-		}
 
-		c.JSON(http.StatusOK, clients)
+			// 关联在线流量：客户端文件名(去扩展) == 证书 CN == getClient().CommonName
+			if online := ov.getClient(); len(online) > 0 {
+				byCN := make(map[string]ClientData, len(online))
+				for _, c := range online {
+					byCN[c.CommonName] = c
+				}
+				for i := range clients {
+					if c, ok := byCN[clients[i].Name]; ok {
+						clients[i].RecvBytes += c.RecvBytes
+						clients[i].SendBytes += c.SendBytes
+						clients[i].Vip = c.Vip
+						clients[i].Vip6 = c.Vip6
+						clients[i].LastSeen = c.ConnDate
+						clients[i].Online = true
+					}
+				}
+			}
 
-	})
+			c.JSON(http.StatusOK, clients)
+
+		})
 
 		ovpn.GET("/client/:name/ccd", func(c *gin.Context) {
 			name := c.Param("name")
@@ -1976,28 +2004,28 @@ func main() {
 				return
 			}
 
-		// v1.0.58：磁盘 .ovpn 是添加客户端时的配置，改协议/端口后不会自动更新，
-		// 旧配置（如 proto udp）与服务端（tcp）不匹配会导致客户端连不上。
-		// 下载时按当前 config.json 动态修正 proto 与 remote 端口。
-		// v1.0.69：额外按 system.base.server_addr 重写 remote 主机，使“改服务器地址 →
-		// 重下载”自动生效，无需删除客户端重加（IPv6 地址自动加 []，与 genclient 一致）。
-		content := string(data)
-		if proto := viper.GetString("openvpn.ovpn_proto"); proto != "" {
-			content = protoLineRe.ReplaceAllString(content, "proto "+proto)
-		}
-		if port := viper.GetString("openvpn.ovpn_port"); port != "" {
-			content = remotePortRe.ReplaceAllString(content, "remote $1 "+port)
-		}
-		if addr := strings.TrimSpace(viper.GetString("system.base.server_addr")); addr != "" {
-			// IPv6 地址必须加 []（OpenVPN 客户端语法），IPv4 不受影响（与 ovpn-helper.sh genclient 一致）
-			if strings.Contains(addr, ":") && !strings.HasPrefix(addr, "[") {
-				addr = "[" + addr + "]"
+			// v1.0.58：磁盘 .ovpn 是添加客户端时的配置，改协议/端口后不会自动更新，
+			// 旧配置（如 proto udp）与服务端（tcp）不匹配会导致客户端连不上。
+			// 下载时按当前 config.json 动态修正 proto 与 remote 端口。
+			// v1.0.69：额外按 system.base.server_addr 重写 remote 主机，使“改服务器地址 →
+			// 重下载”自动生效，无需删除客户端重加（IPv6 地址自动加 []，与 genclient 一致）。
+			content := string(data)
+			if proto := viper.GetString("openvpn.ovpn_proto"); proto != "" {
+				content = protoLineRe.ReplaceAllString(content, "proto "+proto)
 			}
-			// remoteHostRe 捕获端口（组1），仅替换主机，保留已修正的端口
-			content = remoteHostRe.ReplaceAllString(content, "remote "+addr+" $1")
-		}
+			if port := viper.GetString("openvpn.ovpn_port"); port != "" {
+				content = remotePortRe.ReplaceAllString(content, "remote $1 "+port)
+			}
+			if addr := strings.TrimSpace(viper.GetString("system.base.server_addr")); addr != "" {
+				// IPv6 地址必须加 []（OpenVPN 客户端语法），IPv4 不受影响（与 ovpn-helper.sh genclient 一致）
+				if strings.Contains(addr, ":") && !strings.HasPrefix(addr, "[") {
+					addr = "[" + addr + "]"
+				}
+				// remoteHostRe 捕获端口（组1），仅替换主机，保留已修正的端口
+				content = remoteHostRe.ReplaceAllString(content, "remote "+addr+" $1")
+			}
 
-		c.JSON(http.StatusOK, gin.H{"content": content})
+			c.JSON(http.StatusOK, gin.H{"content": content})
 		})
 
 		ovpn.PUT("/client/:name/ccd", func(c *gin.Context) {
@@ -2126,30 +2154,30 @@ func main() {
 				return
 			}
 
-		// v1.0.69：吊销走 helper（sudoers 已授权 ovpn-helper.sh）。
-		// 此前直接 sudo easyrsa revoke，easyrsa 不在 sudoers 白名单 → revoke 静默失败、
-		// 证书残留导致客户端计数虚高（如 0/3 实际只有 1 个客户端）。
-		// helper revoke 内部完成：easyrsa revoke + gen-crl + chown pki 归 nobody。
-		cmd := privExec(ovpnHelper, "revoke", name)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			// 证书不存在/已吊销/空壳客户端等情况：忽略 revoke 错误，继续清理关联文件（不再返回 500）
-			fmt.Printf("[DELETE-CLIENT] revoke %s 失败（已忽略，继续清理）: %s\n", name, string(out))
-		}
+			// v1.0.69：吊销走 helper（sudoers 已授权 ovpn-helper.sh）。
+			// 此前直接 sudo easyrsa revoke，easyrsa 不在 sudoers 白名单 → revoke 静默失败、
+			// 证书残留导致客户端计数虚高（如 0/3 实际只有 1 个客户端）。
+			// helper revoke 内部完成：easyrsa revoke + gen-crl + chown pki 归 nobody。
+			cmd := privExec(ovpnHelper, "revoke", name)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				// 证书不存在/已吊销/空壳客户端等情况：忽略 revoke 错误，继续清理关联文件（不再返回 500）
+				fmt.Printf("[DELETE-CLIENT] revoke %s 失败（已忽略，继续清理）: %s\n", name, string(out))
+			}
 
-		// 直接以绝对路径删除关联文件，检查 error 并明确返回，避免“已吊销但列表仍在”的假成功
-		ovpnFile := filepath.Join(ovData, "clients", fmt.Sprintf("%s.ovpn", name))
-		if err := os.Remove(ovpnFile); err != nil && !os.IsNotExist(err) {
-			logger.Error(context.Background(), "删除客户端配置文件失败: "+err.Error())
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "删除客户端配置文件失败: " + err.Error()})
-			return
-		}
-		ccdFile := filepath.Join(ovData, "ccd", name)
-		if err := os.Remove(ccdFile); err != nil && !os.IsNotExist(err) {
-			logger.Error(context.Background(), "删除客户端 CCD 配置失败: "+err.Error())
-		}
+			// 直接以绝对路径删除关联文件，检查 error 并明确返回，避免“已吊销但列表仍在”的假成功
+			ovpnFile := filepath.Join(ovData, "clients", fmt.Sprintf("%s.ovpn", name))
+			if err := os.Remove(ovpnFile); err != nil && !os.IsNotExist(err) {
+				logger.Error(context.Background(), "删除客户端配置文件失败: "+err.Error())
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "删除客户端配置文件失败: " + err.Error()})
+				return
+			}
+			ccdFile := filepath.Join(ovData, "ccd", name)
+			if err := os.Remove(ccdFile); err != nil && !os.IsNotExist(err) {
+				logger.Error(context.Background(), "删除客户端 CCD 配置失败: "+err.Error())
+			}
 
-		c.JSON(http.StatusOK, gin.H{"message": "删除客户端成功"})
+			c.JSON(http.StatusOK, gin.H{"message": "删除客户端成功"})
 		})
 
 		ovpn.GET("/history", func(c *gin.Context) {
@@ -2225,9 +2253,9 @@ func main() {
 					h.Rip,
 					tools.FormatBytes(h.BytesReceived),
 					tools.FormatBytes(h.BytesSent),
-				time.Unix(h.TimeUnix, 0).In(cst).Format("2006-01-02 15:04:05"),
-				(time.Duration(h.TimeDuration) * time.Second).String(),
-				h.CreatedAt.In(cst).Format("2006-01-02 15:04:05"),
+					time.Unix(h.TimeUnix, 0).In(cst).Format("2006-01-02 15:04:05"),
+					(time.Duration(h.TimeDuration) * time.Second).String(),
+					h.CreatedAt.In(cst).Format("2006-01-02 15:04:05"),
 				}
 
 				if err := writer.Write(record); err != nil {

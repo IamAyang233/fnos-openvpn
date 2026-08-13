@@ -263,6 +263,15 @@
   /* extra: responsive table scroll + small fixes */
   .table-scroll { width: 100%; overflow-x: auto; }
 
+  /* 在线客户端卡：分页条贴底 + 空态垂直居中 */
+  .online-card { display: flex; flex-direction: column; }
+  .online-card .table-scroll { flex: 1; display: flex; flex-direction: column; }
+  .online-card .table-scroll table { flex-shrink: 0; }
+  .online-card .pager { margin-top: auto; }
+  .online-card .empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-3); font-size: 13px; }
+  .online-card .empty-state[hidden] { display: none; }
+  .badge[hidden] { display: none; }
+
   /* 连接记录分页栏 */
   .pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border); flex-wrap: wrap; }
   .pager-info { color: var(--text-3); font-size: 12px; }

@@ -276,7 +276,17 @@ getsubnet() {
 			mask+="."
 		fi
 	done
-	echo $ip $mask
+
+	# v1.0.78：OpenVPN --server 第一个参数必须是网段地址（主机位全 0）。
+	# 用户可能在设置里填网关 IP（如 192.168.31.1/24），直接 echo $ip 会生成
+	# `server 192.168.31.1 255.255.255.0` → Options error: network/netmask combination is invalid
+	# → openvpn 启动即退出（7505 永不监听 → 框架报启动失败）。
+	# 这里把 IP 与掩码按位与，归零主机位：192.168.31.1 & 255.255.255.0 = 192.168.31.0。
+	a=$(echo "$ip" | cut -d. -f1); b=$(echo "$ip" | cut -d. -f2)
+	c=$(echo "$ip" | cut -d. -f3); d=$(echo "$ip" | cut -d. -f4)
+	m1=$(echo "$mask" | cut -d. -f1); m2=$(echo "$mask" | cut -d. -f2)
+	m3=$(echo "$mask" | cut -d. -f3); m4=$(echo "$mask" | cut -d. -f4)
+	echo "$((a & m1)).$((b & m2)).$((c & m3)).$((d & m4)) $mask"
 }
 
 genclient() {

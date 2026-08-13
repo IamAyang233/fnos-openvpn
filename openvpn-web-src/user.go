@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,9 +20,12 @@ import (
 	"gorm.io/gorm"
 )
 
+// v1.0.80：用户名合法性规则（1–64 位，仅字母数字 _ . -），用于新增/导入/登录等入口统一校验
+var validUsernameRe = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,64}$`)
+
 type User struct {
-	ID           uint       `gorm:"primarykey" json:"id" form:"id" uri:"id"`
-	Username     string     `gorm:"uniqueIndex;column:username" json:"username" form:"username"`
+	ID       uint   `gorm:"primarykey" json:"id" form:"id" uri:"id"`
+	Username string `gorm:"uniqueIndex;column:username" json:"username" form:"username"`
 	// 密码绝不下发前端：AfterFind 会解密为明文用于 Login 对比，但任何 JSON 序列化
 	// （/ovpn/group/:id/users、/ovpn/user、/ovpn/user/:id 等）都不允许带出。
 	// form:"password" 保留，保证登录/创建/导入仍能通过表单绑定接收密码。
@@ -101,6 +105,11 @@ func (u *User) Create() error {
 
 	if u.Username == adminUsername {
 		return fmt.Errorf("用户名与系统账户冲突")
+	}
+
+	// v1.0.80：用户名合法性校验（1–64 位，仅字母数字 _ . -）
+	if !validUsernameRe.MatchString(u.Username) {
+		return fmt.Errorf("用户名仅支持字母、数字、_ . -，长度 1–64")
 	}
 
 	result := db.Create(&u)

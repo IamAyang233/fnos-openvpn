@@ -170,7 +170,9 @@
   }
   function renderOnlinePage() {
     var tb = $('onlineTbody');
-    if (!onlineAll.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">当前无在线客户端</td></tr>'; renderLocalPager('onlinePg', 1, ONLINE_PER_PAGE, 0, function () {}); return; }
+    var em = $('onlineEmpty');
+    if (!onlineAll.length) { tb.innerHTML = ''; if (em) em.hidden = false; renderLocalPager('onlinePg', 1, ONLINE_PER_PAGE, 0, function () {}); return; }
+    if (em) em.hidden = true;
     var start = (onlinePage - 1) * ONLINE_PER_PAGE;
     var slice = onlineAll.slice(start, start + ONLINE_PER_PAGE);
     tb.innerHTML = slice.map(function (c) {
@@ -224,7 +226,44 @@
       var ovVer = server.Version || '—';
       var fpkVer = server.FpkVersion ? 'v' + server.FpkVersion : '—';
       $('siVersion').textContent = 'OpenVPN ' + ovVer + ' · FPK ' + fpkVer;
+      // 运行时长：由服务启动时间戳实时计算（仪表盘每 5s 轮询自动刷新）
+      if (typeof server.RunUnix === 'number' && server.RunUnix > 0) {
+        window.__srvStart = server.RunUnix;
+        var up = $('statUptime');
+        if (up) up.textContent = fmtUptime(Math.floor(Date.now() / 1000) - server.RunUnix);
+      }
+      refreshUpdateBadge();
     }).catch(function () {});
+  }
+  function fmtUptime(sec) {
+    sec = Math.max(0, sec | 0);
+    var d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+    if (d > 0) return d + ' 天 ' + h + ' 小时';
+    if (h > 0) return h + ' 小时 ' + m + ' 分';
+    return m + ' 分钟';
+  }
+  var __updateBadgeChecked = false;
+  function refreshUpdateBadge() {
+    var badge = $('siUpdateBadge'), txt = $('siUpdateText');
+    if (!badge || !txt || __updateBadgeChecked) return;
+    __updateBadgeChecked = true; // 只查一次（失败也不重试），避免每 5s 轮询反复请求
+    request.get('/ovpn/update', { silent: true }).then(function (d) {
+      if (!d || d.ok === false) { badge.hidden = true; return; }
+      function pickVer(s) { var m = String(s || '').match(/(\d+\.\d+\.\d+)/); return m ? m[1] : ''; }
+      function cmpVer(a, b) {
+        var pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+        for (var i = 0; i < 3; i++) { var x = pa[i] || 0, y = pb[i] || 0; if (x !== y) return x - y; }
+        return 0;
+      }
+      var rels = (d.releases || []).filter(function (r) { return r.version; });
+      var latest = rels[0] || null;
+      var cur = pickVer(d.current), lat = pickVer(latest && latest.version);
+      if (!lat) { badge.hidden = true; return; }
+      var hasNew = !!(cur && cmpVer(lat, cur) > 0);
+      badge.className = hasNew ? 'badge warn' : 'badge on';
+      txt.textContent = hasNew ? '发现新版本 v' + lat : '已是最新';
+      badge.hidden = false;
+    }).catch(function () { badge.hidden = true; });
   }
 
   /* 在线客户端操作 */
@@ -295,6 +334,79 @@
     var n = parseInt(s, 10);
     return n >= 1 && n <= 65535;
   }
+  // v1.0.79：子网合法性校验——OpenVPN --server 只接受「网段地址」（主机位全 0）。
+  // 用户若填网关 IP（如 192.168.31.1/24），ParseCIDR 格式合法但 OpenVPN 启动即报
+  // Options error: --server directive network/netmask combination is invalid。
+  // 因此必须在保存时就拦截：CIDR 合法 + 主机位必须全 0（IPv4 / IPv6 均校验）。
+  function isValidSubnetCIDR(s) {
+    s = (s || '').trim();
+    var m = s.match(/^([^\/]+)\/(\d{1,3})$/);
+    if (!m) return false;
+    var ip = m[1], prefix = parseInt(m[2], 10);
+    if (ip.indexOf(':') >= 0) {
+      if (prefix < 1 || prefix > 128) return false;
+      var groups = expandV6(ip);
+      if (!groups) return false;
+      var hex = '';
+      for (var i = 0; i < 8; i++) hex += parseInt(groups[i], 16).toString(16).padStart(4, '0');
+      var addr = BigInt('0x' + hex);
+      var mask = (BigInt(1) << BigInt(128 - prefix)) - BigInt(1);
+      return (addr & mask) === BigInt(0);
+    }
+    var oct = ip.split('.').map(Number);
+    if (oct.length !== 4 || oct.some(function (n) { return isNaN(n) || n < 0 || n > 255; })) return false;
+    if (prefix < 1 || prefix > 32) return false;
+    var full = ((oct[0] << 24) | (oct[1] << 16) | (oct[2] << 8) | oct[3]) >>> 0;
+    var mask32 = (prefix === 0) ? 0 : (~((1 << (32 - prefix)) - 1)) >>> 0;
+    // 注意：JS 位运算结果是有符号 32 位，必须再 >>>0 归一为无符号再比较，
+    // 否则 192.x/172.x 等首字节>=128 的网段会被误判为非法。
+    return ((full & mask32) >>> 0) === full;
+  }
+  function expandV6(ip) {
+    // 展开 IPv6 为 8 组，返回数组或 null（不合法）
+    var parts;
+    if (ip.indexOf('::') >= 0) {
+      var sp = ip.split('::');
+      if (sp.length > 2) return null;
+      var left = sp[0] ? sp[0].split(':') : [];
+      var right = sp[1] ? sp[1].split(':') : [];
+      var fill = 8 - left.length - right.length;
+      if (fill < 1) return null;
+      parts = left.concat(new Array(fill).fill('0'), right);
+    } else {
+      parts = ip.split(':');
+      if (parts.length !== 8) return null;
+    }
+    for (var i = 0; i < parts.length; i++) {
+      if (!/^[0-9a-fA-F]{1,4}$/.test(parts[i])) return null;
+    }
+    return parts;
+  }
+  // v1.0.80：通用 IP 校验（IPv4 / IPv6），用于分组 DNS 等参数
+  function isValidIP(s) {
+    s = (s || '').trim();
+    if (!s) return false;
+    if (s.indexOf(':') >= 0) return expandV6(s) !== null;
+    var oct = s.split('.').map(Number);
+    return oct.length === 4 && oct.every(function (n) { return !isNaN(n) && n >= 0 && n <= 255; });
+  }
+  // v1.0.80：分组「访问内网网段」参数校验——支持「网段 掩码」或「网段/前缀」两种写法
+  function isValidRouteParam(s) {
+    s = (s || '').trim();
+    var m = s.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?:\s+(\d{1,3}(?:\.\d{1,3}){3})|(\/\d{1,2}))?$/);
+    if (!m) return false;
+    var oct = m[1].split('.').map(Number);
+    if (oct.some(function (n) { return n < 0 || n > 255; })) return false;
+    if (m[2]) {
+      var moct = m[2].split('.').map(Number);
+      if (moct.some(function (n) { return n < 0 || n > 255; })) return false;
+    }
+    if (m[3]) {
+      var pre = parseInt(m[3].slice(1), 10);
+      if (pre < 1 || pre > 32) return false;
+    }
+    return true;
+  }
 
   $('saveSettings').addEventListener('click', function () {
     var addr = $('setAddr').value.trim();
@@ -308,6 +420,9 @@
     var ipv6Listen = $('setIpv6Listen').checked;
     var subnet6 = $('setSubnet6').value.trim();
     var gateway = $('setGateway').checked;
+    // v1.0.79：子网必须在保存时就校验（网段地址、主机位全 0），不让坏配置落到 server.conf
+    if (subnet && !isValidSubnetCIDR(subnet)) { toast('子网格式不正确：必须是网段地址（主机位全 0），如 10.8.0.0/24 或 192.168.31.0/24；不要填网关 IP（如 192.168.31.1/24）'); return; }
+    if (subnet6 && !isValidSubnetCIDR(subnet6)) { toast('IPv6 子网格式不正确：必须是网段地址（主机位全 0），如 fdaf:f178:e916:6dd0::/64'); return; }
     var p1 = $('setPass').value, p2 = $('setPass2').value;
     var payload = {};
     if (addr) payload['system.base.server_addr'] = addr;
@@ -471,7 +586,11 @@
     } else if (act === 'edit') openClientEdit(name);
   });
   $('addClientBtn').addEventListener('click', function () {
-    uiPrompt({ title: '客户端名称', placeholder: '例如 laptop / phone' }).then(function (name) {
+    uiPrompt({ title: '客户端名称', placeholder: '例如 laptop / phone', validate: function (v) {
+      if (!v) return '请输入客户端名称';
+      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(v)) return '仅支持字母、数字、_ -，长度 1–64';
+      return '';
+    } }).then(function (name) {
       if (!name) return;
       request.post('/ovpn/client', { name: name, serverAddr: '', serverPort: '', config: '', ccdConfig: '', mfa: '' })
         .then(function () { toast('已添加 ' + name); loadClients(); }).catch(function () {});
@@ -668,6 +787,7 @@
     var u = $('auUsername').value.trim();
     var p = $('auPassword').value;
     if (!u) { $('auErr').textContent = '请填写用户名'; return; }
+    if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(u)) { $('auErr').textContent = '用户名仅支持字母、数字、_ . -，长度 1–64'; return; }
     if (p.length < 6) { $('auErr').textContent = '密码至少 6 位'; return; }
     request.post('/ovpn/user', { username: u, password: p, name: u, isEnable: true })
       .then(function () { toast('已添加用户 ' + u); closeAddUser(); loadUsers(); })
@@ -770,6 +890,19 @@
     var id = $('egId').value;
     var name = $('egName').value.trim();
     if (!name) { $('egErr').textContent = '请填写分组名称'; return; }
+    if (name.length > 50) { $('egErr').textContent = '分组名称过长（最多 50 字符）'; return; }
+    // v1.0.80：分组推送参数合法性校验——route 网段与 DNS 地址在保存时拦截，防止坏 push 下发客户端
+    var routeCb = $('egPreset_route'), dnsCb = $('egPreset_dns');
+    if (routeCb && routeCb.checked) {
+      var rp = $('egPresetParam_route').value.trim();
+      if (!rp) { $('egErr').textContent = '请填写访问内网网段（如 192.168.0.0 255.255.0.0）'; return; }
+      if (!isValidRouteParam(rp)) { $('egErr').textContent = '内网网段格式不正确（应为「网段 掩码」或「网段/前缀」，如 192.168.0.0 255.255.0.0）'; return; }
+    }
+    if (dnsCb && dnsCb.checked) {
+      var dp = $('egPresetParam_dns').value.trim();
+      if (!dp) { $('egErr').textContent = '请填写 DNS 地址'; return; }
+      if (!isValidIP(dp)) { $('egErr').textContent = 'DNS 地址格式不正确'; return; }
+    }
     var rawParent = $('egParent').value;
     var payload = { name: name, config: egAssembleConfig() };
     if (rawParent !== '') payload.parent_id = Number(rawParent); // 根分组不发送 parent_id，保留为无上级
@@ -1150,6 +1283,9 @@
       var addr = $('wizAddr').value.trim(), port = $('wizPort').value.trim() || '1194', proto = $('wizProto').value;
       var ipv6 = $('wizIpv6').checked, ipv6Listen = $('wizIpv6Listen').checked, gateway = $('wizGateway').checked;
       if (!addr) { err(2, '请填写服务器对外 IP 或域名'); return; }
+      // v1.0.80：向导复用设置页的地址/端口校验，避免坏值直达后端
+      if (!isValidServerAddr(addr)) { err(2, '服务器地址格式不正确（仅支持 IPv4 / IPv6 / 域名，不能含空格、逗号等）'); return; }
+      if (port && !isValidPort(port)) { err(2, '端口必须是 1–65535 之间的整数'); return; }
       err(2, '');
       request.post('/settings', { 'system.base.server_addr': addr, 'openvpn.ovpn_port': port, 'openvpn.ovpn_proto': proto, 'openvpn.ovpn_ipv6': ipv6, 'openvpn.ovpn_ipv6_listen': ipv6Listen, 'openvpn.ovpn_gateway': gateway })
         .then(function () { state.addr = addr; state.port = port; state.proto = proto; step = 3; render(); }).catch(function (e) { err(2, (e && e.message) || '保存失败'); });
@@ -1157,6 +1293,7 @@
     function s3() {
       var u = $('wizUser').value.trim(), p1 = $('wizUserPass1').value, p2 = $('wizUserPass2').value;
       if (!u) { err(3, '请填写用户名'); return; }
+      if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(u)) { err(3, '用户名仅支持字母、数字、_ . -，长度 1–64'); return; }
       if (p1.length < 6) { err(3, '密码至少 6 位'); return; }
       if (p1 !== p2) { err(3, '两次输入的密码不一致'); return; }
       err(3, '');
