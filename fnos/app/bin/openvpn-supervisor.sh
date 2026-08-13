@@ -95,6 +95,8 @@ kill_stale() {
                 ;;
         esac
     done
+    # 兜底：cmdline 没匹配到的残留（旧版本/路径差异）按监听端口强杀
+    kill_by_port 1194 7505
 }
 kill_stale
 mark "STALE_CLEANED"
@@ -175,7 +177,53 @@ run_vpn() {
         local last; last=$(last_line_marker "${ETC}/vpn_out.log")
         mark "VPN_EXIT_${code}"
         [ -n "$last" ] && mark "VPNERR_${code}_${last}"
+        # v1.0.77：把 openvpn 启动失败的上下文写入 helper_out.log，
+        # 使 Bug 反馈诊断（仅收集 web_out/helper_out）也能看到真正原因，
+        # 不必再专门去翻 vpn_out.log。
+        {
+            echo "=== [$(date '+%F %T')] openvpn 退出 code=${code}，vpn_out.log 末 40 行 ==="
+            tail -n 40 "${ETC}/vpn_out.log" 2>/dev/null
+        } >>"${ETC}/helper_out.log" 2>&1
         sleep 5
+    done
+}
+
+# 按本地监听端口反查并强杀占用进程（兜底 kill_stale 的 cmdline 匹配漏网：
+# 如旧版本 openvpn 启动参数/路径不同、或 fnOS 升级后残留，导致新 openvpn
+# 绑 1194 失败 → 反复退出 → 7505 永不监听 → 框架报"启动失败"）。
+kill_by_port() {
+    local port hex local_addr st inode p fd ln
+    for port in "$@"; do
+        hex=$(printf '%04X' "$port" | tr 'A-F' 'a-f')
+        inode=""
+        for f in /proc/net/tcp /proc/net/tcp6; do
+            [ -r "$f" ] || continue
+            while read -r ln; do
+                set -- $ln
+                local_addr=${2##*:}; local_addr=${local_addr,,}
+                st=$4
+                # inode 是 /proc/net/tcp 的最后一列（第 12 列：sl local rem st ... uid timeout inode），
+                # 用末列 ${!#} 取最稳妥，避免不同内核字段数差异导致取到 uid。
+                inode=${!#}
+                case "$inode" in (*[!0-9]*) inode="" ;; esac
+                [ "$local_addr" = "$hex" ] && [ "$st" = "0A" ] && [ -n "$inode" ] && break 2
+                inode=""
+            done < "$f"
+        done
+        [ -z "$inode" ] && continue
+        for p in /proc/[0-9]*; do
+            pid=${p##*/}
+            [ "$pid" = "$$" ] && continue
+            for fd in "$p"/fd/*; do
+                ln=$(readlink "$fd" 2>/dev/null) || continue
+                case "$ln" in
+                    socket:\["$inode"\])
+                        mark "KILL_PORT_${port}_${pid}"
+                        kill -9 "$pid" 2>/dev/null
+                        ;;
+                esac
+            done
+        done
     done
 }
 

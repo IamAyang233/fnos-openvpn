@@ -204,6 +204,17 @@ func collectAppLogs() string {
 	}
 	tail("web_out.log", 300, 20)
 	tail("helper_out.log", 100, 10)
+	tail("vpn_out.log", 100, 30)
+	// server.conf 仅含路径与端口（无密钥），附上便于定位配置类启动失败
+	if data, err := os.ReadFile(filepath.Join(ovData, "server.conf")); err == nil {
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		if len(lines) > 60 {
+			lines = lines[:60]
+		}
+		fmt.Fprintf(&sb, "--- server.conf (前 %d 行) ---\n%s\n", len(lines), strings.Join(lines, "\n"))
+	} else {
+		fmt.Fprintf(&sb, "--- server.conf: (无此文件) ---\n")
+	}
 	return sb.String()
 }
 
