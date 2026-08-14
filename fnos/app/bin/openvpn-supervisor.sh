@@ -3,7 +3,7 @@
 # 彻底规避"上一轮残留 marker 误导当前观测"的悖论。
 RUN_ID="$(date +%s)-$$"
 mark() {
-    touch "${TRIM_PKGVAR:-/vol2/@appdata/openvpn}/${1}.${RUN_ID}.marker" 2>/dev/null || true
+    touch "${TRIM_PKGVAR:-/vol1/@appdata/openvpn}/${1}.${RUN_ID}.marker" 2>/dev/null || true
 }
 mark "RUN_START"
 # 注意：不再在启动时 rm 旧 marker。
@@ -13,15 +13,24 @@ mark "AFTER_RM"
 
 : "${TRIM_APPNAME:=openvpn}"
 # v1.0.76：TRIM_PKGVAR 兜底自推断（防框架未注入时落死 /vol2，导致非 vol2 部署机器用不了）。
-# 优先级：保持框架注入值 > 脚本真实路径推导（pwd -P 取卷号）→ 最后才回退 /vol2。
+# 优先级：保持框架注入值 > 脚本真实路径推导（pwd -P 取卷号）→ 最后才回退 /vol1（兼容 vol1/vol2/vol3…）。
 # 正常由 fnOS 框架注入 TRIM_PKGVAR（= /vol{n}/@appdata/openvpn），此分支仅作防御性兜底。
 if [ -z "${TRIM_PKGVAR:-}" ]; then
     _SB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P 2>/dev/null)"
     _VOL="$(echo "${_SB}" | sed -n 's|^/vol\([0-9][0-9]*\)/.*|\1|p')"
+    if [ -z "${_VOL}" ]; then
+        # 真实路径未落在 /volN/ 下时，扫描所有卷定位本应用数据目录
+        for v in /vol*/@appdata/openvpn; do
+            [ -d "${v}" ] || continue
+            _VOL="$(echo "${v}" | sed -n 's|^/vol\([0-9][0-9]*\)/.*|\1|p')"
+            break
+        done
+    fi
     if [ -n "${_VOL}" ] && [ -d "/vol${_VOL}/@appdata/openvpn" ]; then
         TRIM_PKGVAR="/vol${_VOL}/@appdata/openvpn"
     else
-        TRIM_PKGVAR="/vol2/@appdata/openvpn"
+        # 兜底：默认主数据卷 vol1（不再写死 vol2）
+        TRIM_PKGVAR="/vol1/@appdata/openvpn"
     fi
 fi
 : "${TRIM_APPDEST:=/var/apps/openvpn}"

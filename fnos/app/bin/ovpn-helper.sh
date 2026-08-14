@@ -21,12 +21,22 @@ if [ -z "${OVPN_DATA:-}" ]; then
         # 官方数据目录 symlink（sudo 后仍可访问，跨卷正确）
         OVPN_DATA="/var/apps/openvpn/var/etc"
     else
+        # sudo 的 env_reset 会清空 TRIM_*；从脚本真实路径推导卷号，兼容 vol1/vol2/vol3…（不再写死 vol2）。
         APP_REAL="$(cd "${APP_BIN_DIR}/.." && pwd -P 2>/dev/null)"
         VOL_NUM="$(echo "${APP_REAL}" | sed -n 's|^/vol\([0-9][0-9]*\)/.*|\1|p')"
+        if [ -z "${VOL_NUM}" ]; then
+            # 真实路径未落在 /volN/ 下时，扫描所有卷定位本应用数据目录
+            for v in /vol*/@appdata/openvpn; do
+                [ -d "${v}" ] || continue
+                VOL_NUM="$(echo "${v}" | sed -n 's|^/vol\([0-9][0-9]*\)/.*|\1|p')"
+                break
+            done
+        fi
         if [ -n "${VOL_NUM}" ] && [ -d "/vol${VOL_NUM}/@appdata/openvpn" ]; then
             OVPN_DATA="/vol${VOL_NUM}/@appdata/openvpn/etc"
         else
-            OVPN_DATA="/vol2/@appdata/openvpn/etc"
+            # 兜底：默认主数据卷 vol1（不再写死 vol2）
+            OVPN_DATA="/vol1/@appdata/openvpn/etc"
         fi
     fi
 fi
