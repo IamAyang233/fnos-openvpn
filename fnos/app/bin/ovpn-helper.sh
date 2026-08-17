@@ -391,6 +391,12 @@ set_ovconfig() {
 	if [ -f "$ovc_file" ]; then
 		ovconfig=$(cat "$ovc_file")
 		if [ -n "$ovconfig" ]; then
+			# v1.0.84：分组配置含 DNS/路由等 push 时，先 push-reset 清空 server.conf
+			# 的全局 push（含网关模式默认 DNS 223.5.5.5/114.114.114.114），再下发分组配置，
+			# 使分组 DNS 优先于全局默认 DNS 生效（否则客户端优先采用全局首个 DNS）。
+			if echo "$ovconfig" | grep -qi "dhcp-option DNS\|push \"route\|^route "; then
+				echo "push-reset" >>"$cc_file"
+			fi
 			echo "$ovconfig" >>"$cc_file"
 			rm -rf "$ovc_file"
 		fi

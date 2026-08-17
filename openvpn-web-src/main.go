@@ -1057,6 +1057,10 @@ func main() {
 				"ovpn_ipv6_listen": viper.GetBool("openvpn.ovpn_ipv6_listen"),
 				"ovpn_subnet6":     viper.GetString("openvpn.ovpn_subnet6"),
 				"ovpn_gateway":     viper.GetBool("openvpn.ovpn_gateway"),
+				// v1.0.84：网关模式 DNS 必须返回给前端，否则保存后 loadSettings 拿不到真值、
+				// 输入框回退默认值，表现为「点保存又变回去」
+				"ovpn_push_dns1": viper.GetString("openvpn.ovpn_push_dns1"),
+				"ovpn_push_dns2": viper.GetString("openvpn.ovpn_push_dns2"),
 			},
 		})
 	})

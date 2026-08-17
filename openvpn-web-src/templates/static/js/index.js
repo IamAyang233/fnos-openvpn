@@ -312,6 +312,9 @@
       $('setIpv6Listen').checked = !!ov.ovpn_ipv6_listen;
       $('setSubnet6').value = ov.ovpn_subnet6 || '';
       $('setGateway').checked = !!ov.ovpn_gateway;
+      // v1.0.84：网关模式 DNS 回填（缺省回退默认 223.5.5.5 / 114.114.114.114）
+      $('setDns1').value = ov.ovpn_push_dns1 || '223.5.5.5';
+      $('setDns2').value = ov.ovpn_push_dns2 || '114.114.114.114';
     }).catch(function () {});
   }
   // v1.0.70：服务器地址 / 端口合法性校验（与后端 POST /settings 保持一致）
@@ -420,9 +423,14 @@
     var ipv6Listen = $('setIpv6Listen').checked;
     var subnet6 = $('setSubnet6').value.trim();
     var gateway = $('setGateway').checked;
+    var dns1 = $('setDns1').value.trim();
+    var dns2 = $('setDns2').value.trim();
     // v1.0.79：子网必须在保存时就校验（网段地址、主机位全 0），不让坏配置落到 server.conf
     if (subnet && !isValidSubnetCIDR(subnet)) { toast('子网格式不正确：必须是网段地址（主机位全 0），如 10.8.0.0/24 或 192.168.31.0/24；不要填网关 IP（如 192.168.31.1/24）'); return; }
     if (subnet6 && !isValidSubnetCIDR(subnet6)) { toast('IPv6 子网格式不正确：必须是网段地址（主机位全 0），如 fdaf:f178:e916:6dd0::/64'); return; }
+    // v1.0.84：DNS 格式校验（留空则不覆盖默认值；非空必须合法 IPv4/IPv6）
+    if (dns1 && !isValidIP(dns1)) { toast('主 DNS 格式不正确（应为 IPv4 或 IPv6 地址）'); return; }
+    if (dns2 && !isValidIP(dns2)) { toast('备 DNS 格式不正确（应为 IPv4 或 IPv6 地址）'); return; }
     var p1 = $('setPass').value, p2 = $('setPass2').value;
     var payload = {};
     if (addr) payload['system.base.server_addr'] = addr;
@@ -433,6 +441,9 @@
     payload['openvpn.ovpn_ipv6_listen'] = ipv6Listen;
     if (subnet6) payload['openvpn.ovpn_subnet6'] = subnet6;
     payload['openvpn.ovpn_gateway'] = gateway;
+    // v1.0.84：网关模式 DNS（留空则不发送，后端保留默认 223.5.5.5 / 114.114.114.114）
+    if (dns1) payload['openvpn.ovpn_push_dns1'] = dns1;
+    if (dns2) payload['openvpn.ovpn_push_dns2'] = dns2;
     if (p1) {
       // 密码策略（v1.0.40）：管理员密码至少 8 位
       if (p1.length < 8) { toast('管理员密码至少 8 位'); return; }

@@ -271,6 +271,11 @@
             </label>
             <div class="hint">开启后客户端所有上网流量（含 DNS）都走 VPN 隧道，出口 IP 变为本服务器公网 IP。关闭则仅虚拟局域网内互通，上网仍走客户端本地网络。</div>
           </div>
+          <div class="input-group">
+            <div class="field" style="flex:1"><label>主 DNS</label><input class="input" id="setDns1" value="" placeholder="223.5.5.5" /></div>
+            <div class="field" style="flex:1"><label>备 DNS</label><input class="input" id="setDns2" value="" placeholder="114.114.114.114" /></div>
+          </div>
+          <div class="hint">网关模式下推送给客户端的 DNS（留空则用默认值 223.5.5.5 / 114.114.114.114）。分组下发的 DNS 优先级高于此处设置，会覆盖全局 DNS 生效。可填 IPv4 或 IPv6 地址。</div>
           <hr style="border:none;border-top:1px solid var(--border-2);margin:18px 0" />
           <h3>管理员密码</h3>
           <div class="input-group">
