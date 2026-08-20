@@ -112,7 +112,7 @@ type ovpn struct {
 }
 
 var (
-	version = "1.0.70"
+	version = "1.0.85"
 	//go:embed templates
 	FS embed.FS
 

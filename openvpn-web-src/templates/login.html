@@ -54,10 +54,6 @@
 
   <body>
     <section class="login-wrap" id="login">
-      <button type="button" class="icon-btn login-theme" id="loginThemeToggle" title="切换主题" aria-label="切换主题">
-        <svg class="icon i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-        <svg class="icon i-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-      </button>
       <div class="login-card">
         <div class="login-logo">
           <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -258,7 +254,7 @@
           } else {
             message.success(data.message);
             setTimeout(() => {
-              location.assign(redirect);
+              window.location.href = redirect;
             }, 500);
           }
         }
@@ -272,7 +268,7 @@
         }
 
         if (xhr.responseJSON?.redirect) {
-          location.assign(xhr.responseJSON.redirect);
+          window.location.href = xhr.responseJSON.redirect;
         }
 
         message.error(xhr.responseJSON?.message || xhr.responseText || xhr.statusText);
@@ -289,15 +285,6 @@
       } else {
         Cookies.remove('remember7d');
       }
-    });
-
-    $('#loginThemeToggle').on('click', function () {
-      const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-      const next = cur === 'dark' ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', next);
-      try {
-        localStorage.setItem('ovpn-theme', next);
-      } catch (e) {}
     });
 
     $('#login form').submit(function (e) {
@@ -387,7 +374,7 @@
         $('#modifyPassModal').modal('hide');
         message.success(data.message);
         setTimeout(() => {
-          location.assign(redirect);
+          window.location.href = redirect;
         }, 500);
       });
 

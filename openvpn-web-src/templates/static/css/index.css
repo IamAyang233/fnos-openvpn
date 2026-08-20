@@ -215,6 +215,10 @@
   .section-head { display: flex; align-items: center; gap: 10px; margin: 4px 0 14px; }
   .section-head h2 { font-size: 17px; margin: 0; }
   .section-head .spacer { flex: 1; }
+  /* 搜索框：放大镜内嵌输入框（桌面/移动统一），下沉到基础层，避免重构后桌面丢失定位与宽度 */
+  .search-wrap { position: relative; flex: 0 0 220px; }
+  .search-wrap .search-ic { position: absolute; left: 11px; top: 9px; color: var(--text-3); pointer-events: none; }
+  .search-wrap .input { padding-left: 34px; }
 
   /* login */
   .login-wrap { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 80; padding: 20px; }
@@ -229,7 +233,9 @@
   /* modal / wizard */
   .overlay { position: fixed; inset: 0; background: rgba(20,23,28,.45); z-index: 90; display: flex; align-items: center; justify-content: center; padding: 18px; }
   .overlay[hidden] { display: none; }
-  .modal { width: 560px; max-width: 100%; max-height: 92vh; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); overflow: hidden; }
+  /* 仅作用于后台自定义弹窗（.overlay 内）。登录页/客户端页用的是 Bootstrap .modal.fade，
+     必须保留 Bootstrap 的 display:none，否则会被这里的 flex 覆盖成“隐形却拦截点击”的覆盖层（窄屏/手机上整屏失效）。 */
+  .overlay .modal { width: 560px; max-width: 100%; max-height: 92vh; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); overflow: hidden; }
   .modal-head { padding: 18px 22px; border-bottom: 1px solid var(--border-2); display: flex; align-items: center; flex: none; }
   .modal-head h3 { margin: 0; font-size: 16px; }
   .modal-body { padding: 20px 22px; overflow-y: auto; flex: 1 1 auto; }
@@ -355,3 +361,52 @@
   .ovcfg-preview-title { font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
   .ovcfg-preview pre { margin: 0; white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow: auto; }
   .ovcfg-preview pre.empty { color: var(--text-3); font-style: italic; }
+
+  /* ===== 手机端适配（≤560 / ≤480px，真·手机断点，不波及桌面/平板） ===== */
+  /* 顶栏精简：≤560px 向导按钮变纯图标、隐藏面包屑、缩小间距，避免 8 个控件挤爆 */
+  @media (max-width: 560px) {
+    .topbar { padding: 0 12px; gap: 8px; }
+    .topbar .crumb { display: none; }
+    .topbar #wizardBtn { padding: 8px; }
+    .topbar #wizardBtn .wz-txt { display: none; }
+    .topbar .page-title { font-size: 15px; }
+  }
+
+  /* 区段头：控件换行，搜索/按钮满宽（客户端页搜索溢出 220px 的根因在这修掉） */
+  @media (max-width: 480px) {
+    .section-head { flex-wrap: wrap; }
+    .section-head h2 { width: 100%; }
+    .section-head .spacer { flex: 1 1 100%; height: 0; }
+    .search-wrap { flex: 1 1 100%; }
+    .section-head .btn { flex: 1 1 100%; justify-content: center; }
+  }
+
+  /* 侧栏真·离屏：≤480px 折叠态不再留 72px 图标栏，直接 translateX(-100%)，
+     抽屉展开时滑入、主区始终保持 margin-left:0（浮层已由 .drawer-backdrop 处理）。
+     >920px 的桌面折叠行为不受影响。 */
+  @media (max-width: 480px) {
+    .sidebar { width: var(--sidebar-w); transition: transform .22s ease; }
+    .app.collapsed .sidebar { transform: translateX(-100%); }
+    .app:not(.collapsed) .sidebar { transform: translateX(0); box-shadow: var(--shadow-lg); }
+    /* 展开/折叠态主区都保持 margin-left:0：手机端侧栏是 fixed 浮层，
+       展开时由 .drawer-backdrop 把内容变暗、抽屉浮于其上，不再挤占主区宽度 */
+    .app.collapsed .main,
+    .app:not(.collapsed) .main { margin-left: 0; }
+  }
+
+  /* 向导/弹窗：≤480px 底部上滑满宽；第 2 步三复选框纵向堆叠 */
+  @media (max-width: 480px) {
+    .overlay { padding: 0; align-items: flex-end; }
+    .overlay .modal { width: 100%; max-width: 100%; max-height: 92vh; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+    .wiz-check-row { flex-direction: column; }
+    .wiz-check-row label { width: 100%; flex: 1 1 100%; min-width: 0; }
+    .steps { font-size: 11px; }
+  }
+
+  /* 关于页卡片：≤480px 解除 min-width，纵向堆叠 */
+  @media (max-width: 480px) {
+    .card { padding: 16px; }
+    section[data-panel="about"] > div[style*="display:flex"] { flex-direction: column; }
+    section[data-panel="about"] .card[style*="min-width"] { min-width: 0; flex: 1 1 100%; }
+    .stat .v { font-size: 22px; }
+  }
