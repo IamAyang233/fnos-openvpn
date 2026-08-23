@@ -576,7 +576,7 @@
         '<td>' + esc(c.name || '—') + '</td>' +
         '<td>' + (c.vip6 ? '<div class="mono">' + esc(c.vip || '—') + '</div><div class="mono sub">' + esc(c.vip6) + '</div>' : '<div class="mono">' + esc(c.vip || '—') + '</div>') + '</td>' +
         '<td>' + (c.online ? '<span class="badge on"><span class="dot"></span>在线</span>' : '<span class="badge off"><span class="dot"></span>离线</span>') + '</td>' +
-        '<td>' + esc(c.date || '—') + '</td>' +
+        '<td>' + esc(c.lastSeen || c.date || '—') + '</td>' +
         '<td>' + fmtBytes(c.recvBytes) + '</td>' +
         '<td>' + fmtBytes(c.sendBytes) + '</td>' +
         '<td><div class="row-actions" style="justify-content:flex-end">' +

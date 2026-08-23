@@ -396,6 +396,10 @@ set_ovconfig() {
 			# 使分组 DNS 优先于全局默认 DNS 生效（否则客户端优先采用全局首个 DNS）。
 			if echo "$ovconfig" | grep -qi "dhcp-option DNS\|push \"route\|^route "; then
 				echo "push-reset" >>"$cc_file"
+				# v1.0.87：push-reset 会清空全局 push 列表（含 server 模式自动下推的
+				# topology subnet），导致 ovpn3 移动端客户端收不到拓扑、回退 net30，
+				# 报 "ifconfig addresses are not in the same /30 subnet"。复位后重新下发拓扑。
+				echo 'push "topology subnet"' >>"$cc_file"
 			fi
 			echo "$ovconfig" >>"$cc_file"
 			rm -rf "$ovc_file"
