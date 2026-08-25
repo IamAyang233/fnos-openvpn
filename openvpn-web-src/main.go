@@ -1501,6 +1501,15 @@ func main() {
 				return
 			}
 
+			// 分组配置（含「全局代理 redirect-gateway」等）变更后同步 NAT，
+			// 使「全局网关关 + 分组全隧道」无需手动重启即可访问互联网（修复 v1.0.89）。
+			if out, err := privExec(ovpnHelper, "ensure_nat").CombinedOutput(); err != nil {
+				if len(out) == 0 {
+					out = []byte(err.Error())
+				}
+				logger.Error(context.Background(), "group ensure_nat: "+string(out))
+			}
+
 			c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
 		})
 

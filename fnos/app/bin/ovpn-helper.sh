@@ -154,10 +154,10 @@ ensure_server() {
 	chown nobody:nogroup "$OVPN_DATA/server.conf" 2>/dev/null || true
 }
 
-# 网关模式（全局代理）：确保 NAT(MASQUERADE) 与 IP 转发。
+# 确保 NAT(MASQUERADE) 与 IP 转发：让 VPN 客户端流量能经服务端出公网/访问内网。
 # iptables/nft 规则均为内存态，NAS 重启后全部丢失，故每次启动/开关变更时重建。
 # 双保险：nft 表 + iptables（兼容 fnOS 底层 legacy/nft 两种防火墙），并放行 FORWARD 转发。
-# 关闭网关模式时清理 NAT/放行规则，避免残留转发。
+# NAT 规则按 -s $SUBNET 限定，仅作用于 VPN 客户端出站流量，故始终安装（不再受全局网关开关门控）。
 ensure_nat() {
 	set +e
 	command -v nft >/dev/null 2>&1 && NFT=1 || NFT=0
@@ -206,7 +206,12 @@ ensure_nat() {
 		echo "ensure_nat: ipv6 listen firewall ok" >&2
 	fi
 
-	if [ "$GATEWAY" = "true" ]; then
+	# NAT / MASQUERADE 始终安装（不再受全局网关开关门控）：
+	# 规则按 -s $SUBNET 限定，仅作用于 VPN 客户端出站流量，常驻安全、无副作用。
+	# 修复 v1.0.89：此前仅全局网关(ovpn_gateway=true)时安装 NAT，
+	# 导致「全局网关关 + 分组勾选全局代理(redirect-gateway)」时服务端缺 NAT，
+	# 分组全隧道只能访问局域网、无法访问互联网；同时「访问内网网段(route)」
+	# 的 LAN 回包也依赖该 MASQUERADE，一并受益。
 		if [ "$NFT" = "1" ]; then
 			{
 				echo "table ip openvpn-nat {"
@@ -245,9 +250,6 @@ ensure_nat() {
 		sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
 		echo 1 >/proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null
 		sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
-	else
-		echo "ensure_nat: gateway off, cleaned" >&2
-	fi
 	set -e
 }
 
