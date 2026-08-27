@@ -313,7 +313,10 @@ genclient() {
 	OVPN_IPV6_LISTEN=$(jq -r '.openvpn.ovpn_ipv6_listen // "false"' "$SYSTEM_CONFIG")
 	SERVER_ADDR=$(jq -r '.system.base.server_addr // ""' "$SYSTEM_CONFIG")
 
-	if [ ! -f "$EASYRSA_PKI/private/$1.key" ]; then
+	# v1.0.96：key 或证书任一缺失都要重签。此前只查 key——revoke 保留 private key
+	# （easyrsa revoke 不删私钥），同名重建时误以为证书还在，跳过 build-client-full，
+	# issued/ 无 crt → .ovpn <cert> 空块连不上、仪表盘分母 0/0。
+	if [ ! -f "$EASYRSA_PKI/private/$1.key" ] || [ ! -f "$EASYRSA_PKI/issued/$1.crt" ]; then
 		easyrsa --batch build-client-full "$1" nopass || exit 1
 	fi
 	mkdir -p "$OVPN_DATA/clients"
@@ -362,7 +365,10 @@ $(echo -e "$4")
 $(cat "$EASYRSA_PKI/ca.crt")
 </ca>
 <cert>
-$(openssl x509 -in "$EASYRSA_PKI/issued/$1.crt")
+$(openssl x509 -in "$EASYRSA_PKI/issued/$1.crt" 2>/dev/null || {
+	echo "genclient: $EASYRSA_PKI/issued/$1.crt 缺失或不可解析" >&2
+	exit 1
+})
 </cert>
 <key>
 $(cat "$EASYRSA_PKI/private/$1.key")
@@ -573,6 +579,9 @@ case $1 in
 	fi
 	easyrsa --batch revoke "$2" || exit 1
 	easyrsa gen-crl || exit 1
+	# v1.0.96: 同步删除私钥。easyrsa revoke 只移走证书不删 key，残留的
+	# private/$2.key 会让同名重建误判"证书还在"而跳过签发（<cert> 空块、计数 0/0）。
+	rm -f "${EASYRSA_PKI}/private/$2.key"
 	# v1.0.94: 清理残留 req（easyrsa 吊销不删 reqs/<name>.req，残留会导致
 	# 同名客户端重建时 build-client-full 报 "Request file already exists" 直接 abort）
 	rm -f "${EASYRSA_PKI}/reqs/$2.req"
