@@ -2023,11 +2023,35 @@ func main() {
 			// v1.0.69：额外按 system.base.server_addr 重写 remote 主机，使“改服务器地址 →
 			// 重下载”自动生效，无需删除客户端重加（IPv6 地址自动加 []，与 genclient 一致）。
 			content := string(data)
-			if proto := viper.GetString("openvpn.ovpn_proto"); proto != "" {
-				content = protoLineRe.ReplaceAllString(content, "proto "+proto)
+			// v1.0.93：下载客户端配置时，proto/port 以「实际运行的 server.conf」为准，而非 config.json。
+			// 否则经 Web UI 直接改 server.conf（updateConfig 文本框）使 server.conf 的 proto/port 与
+			// config.json 不一致时，下载的客户端仍按 config.json 生成，与服务端监听对不上 → 客户端连不上
+			//（典型现象：服务端被改成 udp、config.json 仍是 tcp，客户端下到 tcp 配置 → TCP connect refused）。
+			// server.conf 可能带 udp6/tcp6 双栈后缀，客户端统一用 udp/tcp（bindv6only=0 时 v4 同样可达）。
+			srvProto := viper.GetString("openvpn.ovpn_proto")
+			srvPort := viper.GetString("openvpn.ovpn_port")
+			if scData, err := os.ReadFile(filepath.Join(ovData, "server.conf")); err == nil {
+				for _, line := range strings.Split(string(scData), "\n") {
+					line = strings.TrimSpace(line)
+					switch {
+					case strings.HasPrefix(line, "proto "):
+						p := strings.TrimSpace(strings.TrimPrefix(line, "proto "))
+						p = strings.TrimSuffix(p, "6")
+						if p == "udp" || p == "tcp" {
+							srvProto = p
+						}
+					case strings.HasPrefix(line, "port "):
+						if p := strings.TrimSpace(strings.TrimPrefix(line, "port ")); p != "" {
+							srvPort = p
+						}
+					}
+				}
 			}
-			if port := viper.GetString("openvpn.ovpn_port"); port != "" {
-				content = remotePortRe.ReplaceAllString(content, "remote $1 "+port)
+			if srvProto != "" {
+				content = protoLineRe.ReplaceAllString(content, "proto "+srvProto)
+			}
+			if srvPort != "" {
+				content = remotePortRe.ReplaceAllString(content, "remote $1 "+srvPort)
 			}
 			if addr := strings.TrimSpace(viper.GetString("system.base.server_addr")); addr != "" {
 				// IPv6 地址必须加 []（OpenVPN 客户端语法），IPv4 不受影响（与 ovpn-helper.sh genclient 一致）
@@ -2144,7 +2168,16 @@ func main() {
 							out = []byte(err.Error())
 						}
 						logger.Error(context.Background(), string(out))
-						c.JSON(http.StatusInternalServerError, gin.H{"message": "客户端添加失败"})
+						// v1.0.94: 带回 helper 输出尾部（easyrsa abort 原因等），不再只报笼统失败
+						detail := string(out)
+						if len(detail) > 300 {
+							detail = detail[len(detail)-300:]
+						}
+						msg := "客户端添加失败"
+						if detail != "" {
+							msg += "：" + strings.TrimSpace(detail)
+						}
+						c.JSON(http.StatusInternalServerError, gin.H{"message": msg})
 						return
 					}
 

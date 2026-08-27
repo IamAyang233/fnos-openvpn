@@ -914,6 +914,10 @@
       if (!dp) { $('egErr').textContent = '请填写 DNS 地址'; return; }
       if (!isValidIP(dp)) { $('egErr').textContent = 'DNS 地址格式不正确'; return; }
     }
+    // v1.0.92：分组自定义框校验——拦截服务端全局指令（client-to-client 等已在 server.conf 全局生效，
+    // 放进分组 ccd 会被 OpenVPN 忽略且产生无效配置，正是本次「加 route 后客户端报错」的诱因之一）。
+    var custErr = egValidateCustom();
+    if (custErr) { $('egErr').textContent = custErr; return; }
     var rawParent = $('egParent').value;
     var payload = { name: name, config: egAssembleConfig() };
     if (rawParent !== '') payload.parent_id = Number(rawParent); // 根分组不发送 parent_id，保留为无上级
@@ -1046,6 +1050,35 @@
     });
     $('egConfig').value = remaining.join('\n');
     egUpdatePreview();
+  }
+
+  // v1.0.92：分组自定义框合法性校验——禁止服务端全局指令
+  function egValidateCustom() {
+    var custom = $('egConfig').value || '';
+    var lines = custom.split(/\r?\n/);
+    var forbidden = [
+      [/^\s*client-to-client\b/i, 'client-to-client'],
+      [/^\s*duplicate-cn\b/i, 'duplicate-cn'],
+      [/^\s*client-config-dir\b/i, 'client-config-dir'],
+      [/^\s*topology\b/i, 'topology'],
+      [/^\s*server(-bridge)?\b/i, 'server'],
+      [/^\s*tls-server\b/i, 'tls-server'],
+      [/^\s*(dev|port|proto|keepalive|management|max-clients|user|group|ca|cert|key|dh|tls-auth|tls-crypt)\b/i, null]
+    ];
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i].trim();
+      if (!l || l.charAt(0) === '#' || l.charAt(0) === ';') continue;
+      var m = l.match(/^\s*push\s+"([^"]*)"\s*$/i); // 兼容被 push 包裹（无意义但用户可能照抄）的形式
+      if (m) l = m[1].trim();
+      for (var j = 0; j < forbidden.length; j++) {
+        var fm = l.match(forbidden[j][0]);
+        if (fm) {
+          var nm = forbidden[j][1] || fm[1] || fm[0];
+          return '分组自定义配置不能包含服务端全局指令「' + nm + '」（已在服务端全局生效，写在分组里会被忽略且无效），请删除后重试。';
+        }
+      }
+    }
+    return '';
   }
 
   egInitPresets();

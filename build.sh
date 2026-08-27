@@ -142,6 +142,25 @@ if [ "$PKG_BACKEND" = "tar" ]; then
     APPROOT="$WORK_DIR/approot"
     mkdir -p "$APPROOT"
     cp -r "$FNOS_DIR/app/bin" "$APPROOT/bin"
+    # 防御：去除 CRLF。Windows 上 git core.autocrlf=true 会把脚本检出成 CRLF，
+    # 内核读 shebang 会变 /bin/bash\r → NAS 报 “cannot execute: required file not found” → 应用起不来。
+    # 无论源码是否带 CR，打包前一律抹平，保证 app.tgz 内永远是 LF。
+    # 用 python 实现（不调用 find -exec），规避 MSYS 在超大 PATH 下 spawn 报
+    # “environment is too large for exec()” 导致打包中断。
+    "$PY_CMD" - "$APPROOT/bin" << 'PY_STRIP'
+import os, sys
+root = sys.argv[1]
+for dp, _, fs in os.walk(root):
+    for f in fs:
+        if f.endswith('.sh'):
+            p = os.path.join(dp, f)
+            with open(p, 'rb') as fh:
+                data = fh.read()
+            data2 = data.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+            if data2 != data:
+                with open(p, 'wb') as fh:
+                    fh.write(data2)
+PY_STRIP
     [ -d "$FNOS_DIR/app/lib" ] && cp -r "$FNOS_DIR/app/lib" "$APPROOT/lib"
     cp -r "$FNOS_DIR/ui" "$APPROOT/ui" 2>/dev/null || true
     # 入口图标按 {0} 占位符命名（fnOS 桌面图标约定：icon_64.png / icon_256.png）

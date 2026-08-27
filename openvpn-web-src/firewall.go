@@ -103,12 +103,12 @@ func setNftQosChain(chain, ips, rate, unit string) error {
 			family = "ip6"
 		}
 
-		cmd := exec.Command("nft", "add", "rule", "inet", nftTableName, chain, family, addrField, ip, "limit", "rate", "over", nftRate, nftUnit, "drop")
+		cmd := privExec("nft", "add", "rule", "inet", nftTableName, chain, family, addrField, ip, "limit", "rate", "over", nftRate, nftUnit, "drop")
 		if qos.Handle != "" {
 			if r == 0 {
-				cmd = exec.Command("nft", "delete", "rule", "inet", nftTableName, chain, "handle", qos.Handle)
+				cmd = privExec("nft", "delete", "rule", "inet", nftTableName, chain, "handle", qos.Handle)
 			} else {
-				cmd = exec.Command("nft", "replace", "rule", "inet", nftTableName, chain, "handle", qos.Handle, family, addrField, ip, "limit", "rate", "over", nftRate, nftUnit, "drop")
+				cmd = privExec("nft", "replace", "rule", "inet", nftTableName, chain, "handle", qos.Handle, family, addrField, ip, "limit", "rate", "over", nftRate, nftUnit, "drop")
 			}
 		}
 
@@ -153,7 +153,7 @@ func setNftBlackList(ips, action string) error {
 		return nil
 	}
 
-	cmd := exec.Command("nft", "-f", "-")
+	cmd := privExec("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(sb.String())
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if len(out) == 0 {
@@ -239,7 +239,7 @@ func setNftChain(chain string, f Firewall) error {
 		return nil
 	}
 
-	cmd := exec.Command("nft", "-f", "-")
+	cmd := privExec("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(sb.String())
 
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -276,7 +276,7 @@ func deleteNftChainRule(chain, fid string) error {
 		return nil
 	}
 
-	cmd := exec.Command("nft", "-f", "-")
+	cmd := privExec("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(sb.String())
 
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -326,7 +326,7 @@ func setNftTableSet(name, ips string) error {
 		return nil
 	}
 
-	cmd := exec.Command("nft", "-f", "-")
+	cmd := privExec("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(sb.String())
 
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -342,7 +342,7 @@ func setNftTableSet(name, ips string) error {
 
 func deleteNftTableSet(name string) error {
 	if getNftTableSet(name) {
-		cmd := exec.Command("nft", "delete", "set", "inet", nftTableName, name)
+		cmd := privExec("nft", "delete", "set", "inet", nftTableName, name)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			if len(out) == 0 {
 				out = []byte(err.Error())
@@ -356,7 +356,7 @@ func deleteNftTableSet(name string) error {
 }
 
 func getNftTableSet(name string) bool {
-	return exec.Command("nft", "list", "set", "inet", nftTableName, name).Run() == nil
+	return privExec("nft", "list", "set", "inet", nftTableName, name).Run() == nil
 }
 
 func getNftTableSetElement(name, ip string) bool {
@@ -419,7 +419,7 @@ func addNftTableSetElement(name, ips string) error {
 		return nil
 	}
 
-	cmd := exec.Command("nft", "-f", "-")
+	cmd := privExec("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(sb.String())
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if len(out) == 0 {
@@ -531,7 +531,7 @@ func setOnlineClinetNft(f Firewall) error {
 }
 
 func saveNftConfig() error {
-	cmd := exec.Command("nft", "list", "table", "inet", nftTableName)
+	cmd := privExec("nft", "list", "table", "inet", nftTableName)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if len(out) == 0 {

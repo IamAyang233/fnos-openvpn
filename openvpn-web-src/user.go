@@ -54,8 +54,15 @@ func (u *User) BeforeSave(tx *gorm.DB) (err error) {
 	for i := 0; i < val.NumField(); i++ {
 		fieldVal := val.Field(i)
 		if fieldVal.Kind() == reflect.String && fieldVal.CanSet() {
-			rawStr := val.Field(i).String()
-			val.Field(i).SetString(p.Sanitize(rawStr))
+			// v1.0.95：Password/MfaSecret 是凭据，严禁 HTML 清洗——
+			// 否则含 < > & ' " 的密码被转义/剥标签后落库，登录原文比对必败
+			//（“设特殊字符密码后无法登录”的根因）。
+			switch val.Type().Field(i).Name {
+			case "Password", "MfaSecret":
+				continue
+			}
+			rawStr := fieldVal.String()
+			fieldVal.SetString(p.Sanitize(rawStr))
 		}
 	}
 

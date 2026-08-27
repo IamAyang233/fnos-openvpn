@@ -314,7 +314,7 @@ genclient() {
 	SERVER_ADDR=$(jq -r '.system.base.server_addr // ""' "$SYSTEM_CONFIG")
 
 	if [ ! -f "$EASYRSA_PKI/private/$1.key" ]; then
-		easyrsa --batch build-client-full "$1" nopass >/dev/null
+		easyrsa --batch build-client-full "$1" nopass || exit 1
 	fi
 	mkdir -p "$OVPN_DATA/clients"
 	# v1.0.69：remote 地址处理放在 heredoc 外（函数体），heredoc 内只引用结果。
@@ -407,6 +407,34 @@ set_ovconfig() {
 				# topology subnet），导致 ovpn3 移动端客户端收不到拓扑、回退 net30，
 				# 报 "ifconfig addresses are not in the same /30 subnet"。复位后重新下发拓扑。
 				echo 'push "topology subnet"' >>"$cc_file"
+				# v1.0.92(补)：push-reset 同时清空 server 自动下推的 route-gateway 与 tun-ipv6。
+				# route-gateway 缺失 → 客户端隧道网关变 UNSPEC → OpenVPN Connect 报
+				# "error parsing tunnel_addresses[0].gateway IP address 'UNSPEC'" → 400 Bad Request 连上；tun-ipv6 缺失 → IPv6 隧道不通。
+				# 两者必须补回（服务端隧道 IP = server 网段 +1）。
+				srv_net=$(grep -m1 '^server ' "$ovpn_data/server.conf" 2>/dev/null | awk '{print $2}')
+				if [ -n "$srv_net" ]; then
+					gw_ip=$(echo "$srv_net" | awk -F. '{printf "%d.%d.%d.%d", $1,$2,$3,$4+1}')
+					echo "push \"route-gateway $gw_ip\"" >>"$cc_file"
+				fi
+				if grep -q '^server-ipv6 ' "$ovpn_data/server.conf" 2>/dev/null; then
+					echo 'push "tun-ipv6"' >>"$cc_file"
+				fi
+
+				# v1.0.92：push-reset 同时会清空 server.conf 全局下推的 redirect-gateway
+				# 默认路由与全局 DNS。若这些由全局（网关模式）下发、且本分组未自带覆盖，
+				# 则必须补回，否则「全局网关开 + 分组只配 route」时客户端丢掉默认路由/DNS，
+				# 上了 VPN 却上不了网（本次 issue 的根因）。
+				if echo "$ovconfig" | grep -qi "redirect-gateway"; then
+					: # 分组自带全隧道（含 redirect-gateway），无需补全局默认路由
+				else
+					gw=$(grep -m1 '^push "redirect-gateway' "$ovpn_data/server.conf" 2>/dev/null) || true
+					[ -n "$gw" ] && echo "$gw" >>"$cc_file"
+				fi
+				if echo "$ovconfig" | grep -qi "dhcp-option DNS"; then
+					: # 分组自带 DNS，保持分组优先、不补全局 DNS（v1.0.84 初衷）
+				else
+					grep '^push "dhcp-option DNS' "$ovpn_data/server.conf" 2>/dev/null >>"$cc_file" || true
+				fi
 			fi
 			echo "$ovconfig" >>"$cc_file"
 			rm -rf "$ovc_file"
@@ -545,6 +573,9 @@ case $1 in
 	fi
 	easyrsa --batch revoke "$2" || exit 1
 	easyrsa gen-crl || exit 1
+	# v1.0.94: 清理残留 req（easyrsa 吊销不删 reqs/<name>.req，残留会导致
+	# 同名客户端重建时 build-client-full 报 "Request file already exists" 直接 abort）
+	rm -f "${EASYRSA_PKI}/reqs/$2.req"
 	chown -R nobody:nogroup "${OVPN_DATA}/pki" 2>/dev/null || true
 	exit 0
 	;;
