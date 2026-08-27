@@ -93,7 +93,13 @@ kill_stale() {
         cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
         [ -z "$cmd" ] && continue
         case "$cmd" in
-            *openvpn-supervisor.sh*) continue ;;
+            *openvpn-supervisor.sh*)
+                # 不再跳过：更新/重叠启动时旧 supervisor 可能残留，它会不断复活 openvpn
+                # 抢占 1194，使新进程反复 "Address already in use"。当前 supervisor 已在上方
+                # [ "$pid" = "$self" ] 处被排除，此处只会杀到残留的旧实例。
+                mark "KILL_STALE_SUP_${pid}"
+                kill -9 "$pid" 2>/dev/null
+                continue ;;
             */bin/openvpn-web*|*openvpn-web\ *|*openvpn-web)
                 mark "KILL_STALE_WEB_${pid}"
                 kill -9 "$pid" 2>/dev/null
@@ -104,7 +110,7 @@ kill_stale() {
                 ;;
         esac
     done
-    # 兜底：cmdline 没匹配到的残留（旧版本/路径差异）按监听端口强杀
+    # 兜底：cmdline 没匹配到的残留（旧版本/路径差异、或 UDP 端口）按监听端口强杀（含 UDP）
     kill_by_port 1194 7505
 }
 kill_stale
@@ -205,17 +211,25 @@ kill_by_port() {
     for port in "$@"; do
         hex=$(printf '%04X' "$port" | tr 'A-F' 'a-f')
         inode=""
-        for f in /proc/net/tcp /proc/net/tcp6; do
+        for f in /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6; do
             [ -r "$f" ] || continue
             while read -r ln; do
                 set -- $ln
                 local_addr=${2##*:}; local_addr=${local_addr,,}
                 st=$4
-                # inode 是 /proc/net/tcp 的最后一列（第 12 列：sl local rem st ... uid timeout inode），
+                # inode 取第 12 列（sl local rem st ... uid timeout inode）：现代内核 /proc/net/udp 末列是 drops，
+                # 故不能用末列 ${!#}（会取到 drops 而非 inode）；必须用 ${12}（带花括号，bash 中 $12 会被当成 $1+2）。
                 # 用末列 ${!#} 取最稳妥，避免不同内核字段数差异导致取到 uid。
-                inode=${!#}
+                inode=${12}
                 case "$inode" in (*[!0-9]*) inode="" ;; esac
-                [ "$local_addr" = "$hex" ] && [ "$st" = "0A" ] && [ -n "$inode" ] && break 2
+                # UDP 监听套接字在 /proc/net/udp 中状态为 07（非 TCP 的 0A），
+                # 必须按文件类型区分，否则 UDP 端口（如 1194）永远匹配不到，
+                # 遗留 openvpn 无法被强杀 → 新进程 "Address already in use"。
+                case "$f" in
+                    *udp*) need="07" ;;
+                    *)     need="0A" ;;
+                esac
+                [ "$local_addr" = "$hex" ] && [ "$st" = "$need" ] && [ -n "$inode" ] && break 2
                 inode=""
             done < "$f"
         done
