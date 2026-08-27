@@ -100,6 +100,10 @@ persist-key
 persist-tun
 keepalive 10 60
 topology subnet
+tun-mtu 1400
+mssfix 1360
+# v1.0.91: 无条件设置隧道 MTU 与 MSS，避免加密后 UDP 数据报超过物理 MTU(1500) 导致分片/丢包，
+# 表现为访问局域网其它设备(SMB/HTTP)时大块 TCP 传输吞吐雪崩。mssfix 改写 TCP MSS 选项从源头抑制分片。
 $([[ "$OVPN_IPV6" == "true" ]] && echo -e "server $(getsubnet $OVPN_SUBNET)\nserver-ipv6 $OVPN_SUBNET6" || echo "server $(getsubnet $OVPN_SUBNET)")
 $([[ "$OVPN_GATEWAY" == "true" ]] && echo -e "push \"dhcp-option DNS $OVPN_DNS1\"\npush \"dhcp-option DNS $OVPN_DNS2\"\npush \"redirect-gateway def1 ipv6 bypass-dhcp\"" || echo -e "#push \"dhcp-option DNS $OVPN_DNS1\"\n#push \"dhcp-option DNS $OVPN_DNS2\"\n#push \"redirect-gateway def1 ipv6 bypass-dhcp\"")
 dh none
@@ -345,7 +349,8 @@ tls-client
 tls-version-min 1.2
 tls-cipher TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256
 verb 3
-$([[ "$OVPN_IPV6" == "true" ]] && echo -e "tun-mtu 1400\nmssfix 1360")
+tun-mtu 1400
+mssfix 1360   # v1.0.91: 与 server.conf 一致，确保隧道两端 MTU 协商一致，消除跨隧道路径分片
 $([[ "$OVPN_PROTO" =~ "udp" ]] && echo "explicit-exit-notify")
 $([[ "$5" == "true" ]] && echo 'static-challenge "Enter MFA code" 1')
 
