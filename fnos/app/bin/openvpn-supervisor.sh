@@ -272,9 +272,73 @@ if [ ! -f "${ETC}/config.json" ]; then
     exit 1
 fi
 
-# 每次启动都用 config.json 重新生成 server.conf，确保 proto/port 等配置与 config 同步。
-# 注意：openvpn-web 后端启动时可能先用默认值（udp）生成过一份 server.conf，
-# 这里必须无条件用 ensure_server 覆盖为 config.json 的实际值，否则改了 proto/port 不会生效。
+# 兜底管理员密码：避免「未初始化死锁」
+# 场景：pki/ca.crt 残留、而 config.json 被重建（卸载重装、配置损坏等），
+# 此时走 ensure_server 跳过 init → admin_password 恒为空，登不进；
+# 而 AuthMiddleWare 对未登录只放行 / 与 /login，初始化向导的 /settings 被 302 拦掉，
+# 结果既登不进、也完不成初始化 —— 应用彻底卡死。
+#
+# v1.0.98 修正：此前这里**每次启动**都写入固定的 admin/admin 哈希，
+# 管理员改密后一旦 config.json 被重写/损坏，密码会静默回退到 admin/admin 且无任何提示
+# ——等于给外网留了一扇默认凭据的门。现改为：
+#   ① 只在密码【为空】（真正的死锁）时介入，非空一律不动；
+#   ② 生成随机一次性密码（不再固定 admin），并写入 helper_out.log 供管理员查看；
+#   ③ 立即在 UI 强制提示改密（见 .force_change_pwd 标记文件，登录页读取）。
+# 这样既不卡死，也不会退回众所周知的默认口令。
+if [ "$(jq -r '.system.base.admin_password // ""' "${ETC}/config.json" 2>/dev/null)" = "" ]; then
+    mark "FIX_EMPTY_ADMIN_PASSWORD"
+    # 随机 16 位口令（/dev/urandom，剔除易混淆字符 0/O/1/l/I）
+    ONETIME_PWD="$(tr -dc 'A-HJ-NP-Za-km-z2-9' < /dev/urandom 2>/dev/null | head -c 16)"
+    [ -z "${ONETIME_PWD}" ] && ONETIME_PWD="Ovpn$(date +%s%N 2>/dev/null | tail -c 9)x"
+
+    # bcrypt(cost 12) 哈希：依次尝试 python3 / python（都在函数内实际执行验证，
+    # 避免 Windows 风格存根或 Python2 这类"存在但不可用"的情况）。
+    # 两者都不可用时**绝不回退 admin/admin**——那等于给外网留一扇众所周知的后门。
+    gen_bcrypt_hash() {
+        local pwd="$1" h=""
+        for PY in python3 python; do
+            command -v "$PY" >/dev/null 2>&1 || continue
+            h="$("$PY" -c 'import bcrypt,sys;print(bcrypt.hashpw(sys.argv[1].encode(),bcrypt.gensalt(12)).decode())' "$pwd" 2>/dev/null)"
+            if [ -n "$h" ]; then printf '%s' "$h"; return 0; fi
+        done
+        return 1
+    }
+    ONETIME_HASH="$(gen_bcrypt_hash "${ONETIME_PWD}")"
+
+    # 无可用 bcrypt 时：不写任何口令（保持为空，登录会被拒），
+    # 但把人工修复步骤写进日志 + 置强制改密标记，避免"卡死且无提示"。
+    if [ -z "${ONETIME_HASH}" ]; then
+        mark "NO_BCRYPT_AVAILABLE"
+        {
+            echo "=== [$(date '+%F %T')] 严重：管理员密码为空，且本机无可用 bcrypt（python3/python 均不可用或缺少 bcrypt 模块）==="
+            echo "    为安全起见未写入任何默认口令（绝不使用 admin/admin）。"
+            echo "    请手工重置：在数据目录 ${ETC} 下创建 .resetpw 文件，内容为新密码，重启应用即可生效。"
+        } >>"${ETC}/helper_out.log" 2>&1
+        echo "1" > "${ETC}/.force_change_pwd" 2>/dev/null || true
+        chown nobody:nogroup "${ETC}/.force_change_pwd" 2>/dev/null || true
+        chmod 600 "${ETC}/config.json" 2>/dev/null || true
+        chown nobody:nogroup "${ETC}/config.json" 2>/dev/null || true
+    else
+        jq --arg h "${ONETIME_HASH}" '.system.base.admin_password = $h' \
+            "${ETC}/config.json" > "${ETC}/config.json.fix" 2>/dev/null \
+            && mv -f "${ETC}/config.json.fix" "${ETC}/config.json"
+        # viper 创建的文件为 0600 且属主 nobody（web 以 nobody 运行），改后须还原
+        chown nobody:nogroup "${ETC}/config.json" 2>/dev/null || true
+        chmod 600 "${ETC}/config.json" 2>/dev/null || true
+        # 记录一次性密码（仅本机日志可见），并在 UI 标记强制改密
+        {
+            echo "=== [$(date '+%F %T')] 检测到管理员密码为空（未初始化死锁），已自动生成一次性密码 ==="
+            echo "    一次性密码: ${ONETIME_PWD}"
+            echo "    请登录后立即在「设置」中修改密码。"
+        } >>"${ETC}/helper_out.log" 2>&1
+        echo "1" > "${ETC}/.force_change_pwd" 2>/dev/null || true
+        chown nobody:nogroup "${ETC}/.force_change_pwd" 2>/dev/null || true
+    fi
+fi
+
+# v1.2.0：ensure_server 内部已改为「增量继承」——先用 config.json 重建受管控的指令
+# （port/proto/server/push/…），再把磁盘上不受 config.json 管控的自定义行追加回去。
+# 这样既保证改了 proto/port 能生效，又不会抹掉用户在 Web UI 里手写的 route 等配置。
 if [ -f "${EASYRSA_PKI}/ca.crt" ]; then
     mark "ENSURE_SERVER"
     if ! "${APP_BIN_DIR}/ovpn-helper.sh" ensure_server >"${ETC}/helper_out.log" 2>&1; then

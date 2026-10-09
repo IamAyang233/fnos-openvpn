@@ -413,18 +413,22 @@
           $('#disableMfa').attr('id', 'enableMfa');
         }
 
+        // v1.0.98：MFA 密钥改为顶层 mfaSecret 字段下发（User 对象已不再序列化它，
+        // 避免其它接口把密钥一并带出去）
+        var secret = data.mfaSecret || '';
+
         new QRious({
           element: document.getElementById('qrcode'),
           value:
             'otpauth://totp/openvpn-web:' +
             data.user.username +
             '?algorithm=SHA1&digits=6&period=30&secret=' +
-            encodeURIComponent(data.user.mfaSecret) +
+            encodeURIComponent(secret) +
             '&issuer=openvpn-web',
           size: 200,
         });
 
-        $('#mfaModal code[name="key"]').text(data.user.mfaSecret);
+        $('#mfaModal code[name="key"]').text(secret);
         $('#mfaModal input[name="id"]').val(data.user.id);
 
         $('#mfaModal').modal('show');

@@ -112,7 +112,10 @@ type ovpn struct {
 }
 
 var (
-	version = "1.0.85"
+	// build.sh 用 -ldflags "-X main.version=<manifest version>" 注入；
+	// 此处仅作兜底（漏注入时更新检测/反馈上报不至于报一个很旧的版本）。
+	// 发版时请一并同步为 manifest 的版本号（v1.1.1）。
+	version = "1.1.1"
 	//go:embed templates
 	FS embed.FS
 
@@ -694,11 +697,20 @@ func AuthMiddleWare() gin.HandlerFunc {
 		session := sessions.Default(c)
 		user := session.Get("user")
 
-		if c.GetHeader("O-Token") == viper.GetString("system.base.token") {
-			if c.Request.URL.Path == "/ovpn/login" || c.Request.URL.Path == "/ovpn/history" || c.Request.URL.Path == "/ovpn/firewall" {
-				if IsLocalRequest(c) {
-					c.Next()
-					return
+		// O-Token 特权通道：仅 openvpn 钩子（auth / connect 记录）使用，必须来自本机回环。
+		// 安全加固（v1.0.98）：
+		//   ① 此前用明文 `==` 比较，改用恒定时间比较（防时序侧信道）；
+		//   ② token 为空时必须拒绝——否则攻击者不带 O-Token 头即可匹配空值直接通过；
+		//   ③ 白名单收窄：/ovpn/firewall 被移出，钩子并不需要它，
+		//      而它会经 privExec("nft",...) 增删 root 级防火墙规则，
+		//      本机任意能读到 config.json 的进程即可操纵防火墙。
+		if tok := viper.GetString("system.base.token"); tok != "" {
+			if subtle.ConstantTimeCompare([]byte(c.GetHeader("O-Token")), []byte(tok)) == 1 {
+				if c.Request.URL.Path == "/ovpn/login" || c.Request.URL.Path == "/ovpn/history" {
+					if IsLocalRequest(c) {
+						c.Next()
+						return
+					}
 				}
 			}
 		}
@@ -821,6 +833,14 @@ func main() {
 	}
 
 	r := gin.New()
+
+	// 安全加固（v1.0.98）：gin 默认 trustedProxies 为 0.0.0.0/0 与 ::/0，
+	// 即 ClientIP() 无条件采信 X-Forwarded-For —— 攻击者每请求换一个 XFF
+	// 即可让登录失败计数与验证码阈值永远无法触发。这里只信任真实 RemoteAddr。
+	// 注意：unix socket（统一网关）通道下 RemoteAddr 为空，此时 ClientIP() 返回 ""，
+	// 限速改由 captcha.go 的 loginFailKey 按「anon + 用户名」兜底，不会退化成不计数。
+	_ = r.SetTrustedProxies(nil)
+
 	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
 
 		var statusColor, methodColor, resetColor string
@@ -848,6 +868,11 @@ func main() {
 
 	r.Use(gin.Recovery())
 
+	// 安全加固（v1.0.98）：补齐响应头（X-Frame-Options / CSP 等，此前 0 处）与 CSRF 校验。
+	// CSRF 挂在 AuthMiddleWare 之前：未登录也要拦，避免登录接口被跨站提交。
+	r.Use(SecurityHeaders())
+	r.Use(CSRFMiddleWare())
+
 	templ := template.Must(template.New("").ParseFS(FS, "templates/*.html"))
 	r.SetHTMLTemplate(templ)
 	f, _ := fs.Sub(FS, "templates/static")
@@ -864,9 +889,13 @@ func main() {
 		key := c.PostForm("c_key")
 		dots := c.PostForm("c_dots")
 		passcode := c.PostForm("passcode")
+		// 先取用户名：限速键需要它做兜底（IP 在网关通道下恒为空）
+		loginUser := strings.TrimSpace(c.PostForm("username"))
 
-		n := getLoginFail(cip)
-		if passcode == "" && n >= loginCaptchaThreshold {
+		// 安全加固（v1.0.98）：MFA 分支此前绕过人机验证（条件含 passcode == ""），
+		// TOTP 空间仅 10^6，拿到密码后可无限撞库。现在两个分支一律纳入计数与验证码。
+		n := getLoginFail(cip, loginUser)
+		if n >= loginCaptchaThreshold {
 			if key == "" && dots == "" {
 				c.JSON(401, gin.H{"message": "需要进行人机验证", "needCaptcha": true})
 				return
@@ -881,14 +910,28 @@ func main() {
 		session := sessions.Default(c)
 		remember7d := c.PostForm("remember7d")
 
+		// 安全加固（v1.0.98）：显式设置 SameSite / Secure / Path。
+		// 此前只设 HttpOnly 与 MaxAge → gorilla 不下发 SameSite 属性（依赖浏览器默认 Lax，
+		// 旧浏览器与非浏览器 UA 不成立）、Secure 恒 false（HTTP 管理口明文传输）、
+		// Path 为空回落 "/"（cookie 会随同域其它应用一起发送）。
+		cookiePath := "/"
+		if gwPrefix != "" {
+			cookiePath = gwPrefix + "/"
+		}
 		if remember7d == "on" {
 			session.Options(sessions.Options{
 				HttpOnly: true,
+				Secure:   isSecureRequest(c),
+				SameSite: http.SameSiteStrictMode,
+				Path:     cookiePath,
 				MaxAge:   3600 * 24 * 7,
 			})
 		} else {
 			session.Options(sessions.Options{
 				HttpOnly: true,
+				Secure:   isSecureRequest(c),
+				SameSite: http.SameSiteStrictMode,
+				Path:     cookiePath,
 				MaxAge:   3600 * 1,
 			})
 		}
@@ -912,7 +955,7 @@ func main() {
 				session.Set("user", u.Username)
 				session.Save()
 
-				resetLoginFail(cip)
+				resetLoginFail(cip, loginUser)
 				c.JSON(200, gin.H{"message": "登录成功", "redirect": redirPath("/admin")})
 				return
 			} else {
@@ -920,15 +963,21 @@ func main() {
 			}
 		} else {
 			if passcode != "" {
-				if validUser, ok := cc.Get("valid_user"); ok {
+				// 安全加固（v1.0.98）：valid_user 此前是**全局单键**，
+				// 并发登录时 A 的密码阶段结果会被 B 的 MFA 阶段消费（会话混淆）。
+				// 改为按「用户名」分键，各自独立。
+				if validUser, ok := cc.Get("valid_user:" + loginUser); ok {
 					if u.Username == validUser.(string) {
 						if ValidateMfa(passcode, u.Info().MfaSecret) {
-							cc.Delete("valid_user")
+							cc.Delete("valid_user:" + loginUser)
 							session.Set("user", u.Username)
 							session.Save()
-							resetLoginFail(cip)
-							c.JSON(200, gin.H{"message": "登录成功", "redirect": redirPath("/")})
+							resetLoginFail(cip, loginUser)
+							// 普通用户落地 /client：/ 会 302 回 /client，直接给终态避免多一跳
+							c.JSON(200, gin.H{"message": "登录成功", "redirect": redirPath("/client")})
 						} else {
+							// MFA 失败同样计入失败次数（此前漏掉，撞 TOTP 无成本）
+							setLoginFail(cip, loginUser)
 							c.JSON(401, gin.H{"message": "MFA验证失败"})
 						}
 
@@ -936,6 +985,7 @@ func main() {
 					}
 				}
 
+				setLoginFail(cip, loginUser)
 				c.JSON(401, gin.H{"message": "登录超时", "redirect": redirPath("/login")})
 				return
 			}
@@ -943,7 +993,7 @@ func main() {
 			if err = u.Login(false); err == nil {
 				user := u.Info()
 				if user.MfaSecret != "" {
-					cc.Set("valid_user", u.Username, 1*time.Minute)
+					cc.Set("valid_user:"+loginUser, u.Username, 1*time.Minute)
 					c.JSON(200, gin.H{"message": "需要MFA验证"})
 					return
 				}
@@ -951,14 +1001,14 @@ func main() {
 				session.Set("user", u.Username)
 				session.Save()
 
-				resetLoginFail(cip)
+				resetLoginFail(cip, loginUser)
 
-				c.JSON(200, gin.H{"message": "登录成功", "redirect": redirPath("/"), "user": gin.H{"id": user.ID, "isFirstLogin": *user.IsFirstLogin}})
+				c.JSON(200, gin.H{"message": "登录成功", "redirect": redirPath("/client"), "user": gin.H{"id": user.ID, "isFirstLogin": *user.IsFirstLogin}})
 				return
 			}
 		}
 
-		setLoginFail(cip)
+		setLoginFail(cip, loginUser)
 
 		c.JSON(401, gin.H{"message": err.Error()})
 	})
@@ -990,11 +1040,12 @@ func main() {
 				return
 			}
 
-			u := User{Username: user}.Info()
-			if u.IsFirstLogin == nil || *u.IsFirstLogin {
-				c.Redirect(302, "/login")
-				return
-			}
+			// 已登录的普通用户直接去客户端状态页：/ 渲染的是管理界面（index.html），
+			// 其仪表盘轮询 /api/bootstrap 会被 AuthMiddleWare 302 回 /，
+			// 形成「/ → bootstrap 302 → /」的浏览器整页刷新循环（v1.0.98 后随 CSRF/302
+			// opaqueredirect 处理表现为每秒刷新一次）。
+			c.Redirect(302, "/client")
+			return
 		}
 
 		// 未登录也返回新版管理界面（index.html），由前端 JS 检测 401 后引导登录；
@@ -1354,7 +1405,19 @@ func main() {
 			case "updateConfig":
 				content := c.PostForm("content")
 
-				file, err := os.OpenFile(filepath.Join(ovData, "server.conf"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+				// 现在做三层校验：危险指令拒绝、基础设施指令只能原样继承不可改写、
+				// 常规指令需在白名单内。以磁盘上现有 server.conf 为继承基准，
+				// 因此"打开配置不改直接保存"不会被拒（pinned 行值一致即放行）。
+				confPath := filepath.Join(ovData, "server.conf")
+				current, _ := os.ReadFile(confPath) // 读失败按空基准处理（首次写入）
+
+				if badLine, reason := validateServerConf(content, string(current)); badLine > 0 {
+					logger.Error(context.Background(), "server.conf 校验拒绝: "+reason)
+					c.JSON(http.StatusBadRequest, gin.H{"message": "配置未保存：" + reason})
+					return
+				}
+
+				file, err := os.OpenFile(confPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 				if err != nil {
 					logger.Error(context.Background(), err.Error())
 					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -2147,6 +2210,32 @@ func main() {
 			ccdConfig := c.PostForm("ccdConfig")
 			mfa := c.PostForm("mfa")
 
+			// 安全加固（v1.0.98）：自定义配置会被原样写进客户端 .ovpn
+			// （ovpn-helper.sh genclient 的 $4），此前无任何校验，可注入
+			// up / plugin / redirect-gateway 等指令劫持客户端流量或执行程序。
+			// 客户端侧允许 hub 不常见指令，故只套危险指令黑名单。
+			if cfgBad, cfgReason := validateConfigLines(config, false); cfgBad > 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "自定义配置被拒绝：" + cfgReason})
+				return
+			}
+			// ccd 是服务端 per-client 配置目录，同样以 root 被 openvpn 读取，一并校验
+			if ccdBad, ccdReason := validateConfigLines(ccdConfig, false); ccdBad > 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "客户端专属配置被拒绝：" + ccdReason})
+				return
+			}
+			// 端口必须是 1-65535 的整数，避免往 helper 里塞入带空格/分号的串
+			if serverPort != "" {
+				if n, err := strconv.Atoi(serverPort); err != nil || n < 1 || n > 65535 {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "端口必须是 1–65535 之间的整数"})
+					return
+				}
+			}
+			// 服务器地址只允许主机名/IP（防 .ovpn 的 remote 行被注入额外参数）
+			if serverAddr != "" && !validServerAddr(serverAddr) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "服务器地址格式非法（仅允许域名、IPv4 或 IPv6）"})
+				return
+			}
+
 			clientsDir := filepath.Join(ovData, "clients")
 
 			os.MkdirAll(clientsDir, 0755)
@@ -2504,17 +2593,19 @@ func main() {
 				u.Username = user
 			}
 
-			u = u.Info()
+			// 安全加固（v1.0.98）：MfaSecret 已加 json:"-" 不再随用户对象外泄，
+			// 但本接口是"用户查看/绑定自己的 MFA"页面，必须显式下发密钥。
+			// 仅返回本会话用户自己的密钥，不返回任何他人字段。
 			if u.MfaSecret == "" {
 				secret, err := GenMfa(u.Username)
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Errorf("MFA: %w", err).Error()})
-				} else {
-					u.MfaSecret = secret
-					c.JSON(http.StatusOK, gin.H{"mfaEnable": false, "user": u})
+					return
 				}
+				u.MfaSecret = secret
+				c.JSON(http.StatusOK, gin.H{"mfaEnable": false, "mfaSecret": secret, "user": u})
 			} else {
-				c.JSON(http.StatusOK, gin.H{"mfaEnable": true, "user": u})
+				c.JSON(http.StatusOK, gin.H{"mfaEnable": true, "mfaSecret": u.MfaSecret, "user": u})
 			}
 		})
 

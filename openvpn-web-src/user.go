@@ -23,6 +23,14 @@ import (
 // v1.0.80：用户名合法性规则（1–64 位，仅字母数字 _ . -），用于新增/导入/登录等入口统一校验
 var validUsernameRe = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,64}$`)
 
+// passwordUnreadableSentinel 是口令解密失败时填入的哨兵值（v1.0.98）。
+//
+// 不能用空串：空串会被空密码命中（ConstantTimeCompare("","")==1 → 直接登录成功）。
+// 这个值包含不可能由用户输入产生的字符组合，任何密码都不会与它相等，
+// 从而保证"单行损坏 → 该用户登不进，但其余用户与整体查询不受影响"，
+// 而不是像 v1.0.97 那样整张用户表查询全部失败。
+const passwordUnreadableSentinel = "\x00UNREADABLE\x00"
+
 type User struct {
 	ID       uint   `gorm:"primarykey" json:"id" form:"id" uri:"id"`
 	Username string `gorm:"uniqueIndex;column:username" json:"username" form:"username"`
@@ -37,7 +45,12 @@ type User struct {
 	ExpireDate   string     `gorm:"default:NULL" json:"expireDate" form:"expireDate"`
 	IpAddr       string     `gorm:"uniqueIndex;default:NULL" json:"ipAddr" form:"ipAddr"`
 	OvpnConfig   string     `json:"ovpnConfig" form:"ovpnConfig"`
-	MfaSecret    string     `json:"mfaSecret" form:"mfaSecret"`
+	// 安全加固（v1.0.98）：MfaSecret 加 json:"-" —— 此前未加，
+	// GET /ovpn/user、GET /ovpn/group/:id/users、GET /client/mfa 都会把
+	// TOTP 密钥随用户对象一起返回，第二因子形同虚设。
+	// form 标签保留，保证前端绑定 MFA 的表单字段仍可用；
+	// 需要向本人下发密钥的 /client/mfa 由 handler 单独显式返回（见 main.go）。
+	MfaSecret    string     `json:"-" form:"mfaSecret"`
 	IsFirstLogin *bool      `gorm:"default:true" form:"isFirstLogin" json:"isFirstLogin"`
 	LastLoginAt  *time.Time `json:"lastLoginAt,omitempty" form:"lastLoginAt,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt,omitempty" form:"createdAt,omitempty"`
@@ -74,13 +87,24 @@ func (u *User) BeforeSave(tx *gorm.DB) (err error) {
 	return nil
 }
 
-func (u *User) AfterFind(tx *gorm.DB) (err error) {
+// AfterFind 解密口令。
+//
+// 安全加固（v1.0.98）：此前解密失败时**原样向上抛错**，而 GORM 的 AfterFind 报错
+// 会让整条查询失败——secretKey 随 config.json 重建更换后（v1.0.97 场景）所有旧行
+// 解密失败，导致 All()/GetUsers 全部返回空，管理员在 UI 里看不到任何用户、
+// 也无法用 UI 重置密码，与"既登不进也无法初始化"同构。
+// 现在吞掉错误并置一个**不可能被比对成功**的哨兵值（而非空串——空串会被
+// 空密码登录命中，见 Login 的 M-2 修复），保证单行损坏不影响整体查询。
+func (u *User) AfterFind(tx *gorm.DB) error {
 	dp, err := aes.AesDecrypt(u.Password, secretKey)
-	if err == nil {
-		u.Password = dp
+	if err != nil || dp == "" {
+		u.Password = passwordUnreadableSentinel
+		return nil
 	}
 
-	return
+	u.Password = dp
+
+	return nil
 }
 
 func (u *User) All() []User {
@@ -142,6 +166,13 @@ func (u *User) Login(clogin bool) error {
 	user := u.Username
 	pass := u.Password
 	commonName := u.OvpnConfig
+
+	// 安全加固（v1.0.98）：拒绝空密码。
+	// 存量行可能因 BeforeSave 的 `if u.Password != ""` 跳过加密、或 AfterFind
+	// 解密失败而留下空口令，与空密码做恒定时间比较会返回"匹配"直接登录成功。
+	if pass == "" {
+		return fmt.Errorf("密码错误")
+	}
 
 	if clogin {
 		if viper.GetInt("system.base.max_duplicate_login") > 0 {

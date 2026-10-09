@@ -72,6 +72,23 @@ func getNftQosChainRule(chain, ip string) ChainRuleData {
 }
 
 func setNftQosChain(chain, ips, rate, unit string) error {
+	// 安全加固（v1.0.98）：IP / 速率 / 单位在拼进 nft 命令前全部校验。
+	// 虽然走 exec 参数数组（无 shell 注入），但 nft 语法允许
+	// `1.2.3.4 } delete rule ... #` 之类的闭合注入，可删掉他人限速规则；
+	// unit 若被塞入额外 token 也会改变规则语义。
+	if err := validateIPList(ips); err != nil {
+		return err
+	}
+	if err := validateRateValue(rate); err != nil {
+		return err
+	}
+	// unit 前端一般不传（内部固定 kbytes/second），传了就必须合法
+	if unit != "" {
+		if err := validateRateUnit(unit); err != nil {
+			return err
+		}
+	}
+
 	r, _ := strconv.Atoi(rate)
 	if r < 0 {
 		return nil
@@ -125,6 +142,14 @@ func setNftQosChain(chain, ips, rate, unit string) error {
 }
 
 func setNftBlackList(ips, action string) error {
+	// 安全加固（v1.0.98）：IP 在拼进 nft 脚本前必须校验格式。
+	// nft 走 stdin 而非 shell 故无命令注入，但攻击者可用
+	// `1.2.3.4 } add rule inet openvpn-nft forward accept #`
+	// 闭合语法块后注入任意规则（解掉自己的黑名单、或 drop 他人流量）。
+	if err := validateIPList(ips); err != nil {
+		return err
+	}
+
 	var sb strings.Builder
 	var v4, v6 []string
 
@@ -384,6 +409,11 @@ func getNftTableSetElement(name, ip string) bool {
 }
 
 func addNftTableSetElement(name, ips string) error {
+	// 安全加固（v1.0.98）：同上，nft 脚本拼接前校验 IP 格式。
+	if err := validateIPList(ips); err != nil {
+		return err
+	}
+
 	var v4, v6 []string
 	var sb strings.Builder
 

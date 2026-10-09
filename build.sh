@@ -35,12 +35,15 @@ if tar --version 2>/dev/null | grep -qi "gnu tar"; then
 else
     PKG_BACKEND=python
 fi
+# 注意：不能只用 command -v 判断 python3 —— Windows 上 Microsoft Store 的
+# python3 存根（WindowsApps/python3.exe）"存在"但执行即以 exit 49 失败
+# （提示去商店安装）。只看存在性会让 PY_CMD 指向一个跑不起来的命令，
+# 表现是打包在 CRLF 剥离那一步静默中断、无任何报错。故必须实际执行验证。
 PY_CMD=""
-if command -v python3 >/dev/null 2>&1; then PY_CMD=python3
-elif command -v python >/dev/null 2>&1; then PY_CMD=python
-elif command -v py >/dev/null 2>&1; then PY_CMD="py -3"
-fi
-[ "$PKG_BACKEND" = "python" ] && [ -z "$PY_CMD" ] && { echo "[ERROR] 打包需要 GNU tar 或 python3（当前环境都没有）" >&2; exit 1; }
+for cand in python3 python "py -3"; do
+    if $cand -c 'import sys; sys.exit(0)' >/dev/null 2>&1; then PY_CMD=$cand; break; fi
+done
+[ -z "$PY_CMD" ] && { echo "[ERROR] 打包需要一个可用的 Python（python3/python/py -3 均不可用）" >&2; exit 1; }
 # 非 ASCII/含空格的路径转 Windows 原生路径（python 不认 /d/ 格式）
 winpath() { echo "$1" | sed 's|^/\([a-zA-Z]\)/|\1:/|'; }
 

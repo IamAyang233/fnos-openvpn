@@ -59,7 +59,12 @@
       opts = opts || {};
       var o = {
         method: method,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          // CSRF 防护（v1.0.98）：跨站脚本无法在无 CORS 许可时设置自定义头，
+          // 后端 CSRFMiddleWare 据此放行同源请求、拒绝跨站伪造。
+          'X-Requested-With': 'XMLHttpRequest'
+        },
         redirect: 'manual'
       };
       if (data) o.body = new URLSearchParams(data);
@@ -69,7 +74,19 @@
           if (location.pathname.indexOf('/login') === -1) location.href = BASE + '/login';
           throw new Error('登录超时，请重新登录');
         }
-        if (resp.type === 'opaqueredirect') { location.href = resp.url; return; }
+        if (resp.type === 'opaqueredirect') {
+          // 防刷新死循环：若 2 秒内已因 opaqueredirect 整页跳转过一次，
+          // 说明跳转目标未解决会话问题（如浏览器丢弃 cookie），再跳只会无限刷新。
+          var now = Date.now();
+          if (window.__ovpnRedirectAt && now - window.__ovpnRedirectAt < 2000) {
+            console.error('检测到重定向循环，已停止跳转。请清空站点 Cookie 后重新登录。');
+            toast('登录状态异常，请退出后重新登录');
+            return;
+          }
+          window.__ovpnRedirectAt = now;
+          location.href = resp.url;
+          return;
+        }
         return resp.json().catch(function () { return {}; }).then(function (body) {
           if (!resp.ok) {
             var msg = (body && body.message) || ('请求失败 ' + resp.status);
@@ -121,6 +138,78 @@
   var logoutBtn = $('logoutBtn');
   if (logoutBtn) logoutBtn.addEventListener('click', function () {
     window.location.href = BASE + '/logout';
+  });
+
+  /* ---------- server.conf 在线编辑（风险须知 + 强制阅读 10 秒） ---------- */
+  var SC_READ_SECONDS = 10;
+  var scTimer = null;
+  function scStopTimer() {
+    if (scTimer) { clearInterval(scTimer); scTimer = null; }
+  }
+  function scCloseRisk() {
+    scStopTimer();
+    $('scRiskModal').hidden = true;
+    $('scEnterEdit').disabled = true;
+    $('scEnterEdit').textContent = '我已了解风险，继续编辑';
+    $('scCountdown').textContent = '请阅读风险须知（剩余 ' + SC_READ_SECONDS + ' 秒）';
+  }
+  function scOpenRisk() {
+    var left = SC_READ_SECONDS;
+    var btn = $('scEnterEdit'), tip = $('scCountdown');
+    btn.disabled = true;
+    btn.textContent = '我已了解风险，继续编辑';
+    tip.textContent = '请阅读风险须知（剩余 ' + left + ' 秒）';
+    $('scRiskModal').hidden = false;
+    scStopTimer();
+    scTimer = setInterval(function () {
+      left--;
+      if (left > 0) {
+        tip.textContent = '请阅读风险须知（剩余 ' + left + ' 秒）';
+        return;
+      }
+      scStopTimer();
+      tip.textContent = '';
+      btn.disabled = false;
+    }, 1000);
+  }
+  function scLoadConfig() {
+    $('scErr').textContent = '';
+    $('scText').value = '载入中…';
+    request.post('/ovpn/server', { action: 'getConfig' }, { silent: true }).then(function (d) {
+      $('scText').value = (d && d.content) || '';
+    }).catch(function (e) {
+      $('scText').value = '';
+      $('scErr').textContent = (e && e.message) || '载入失败';
+    });
+  }
+  function scOpenEditor() {
+    scCloseRisk();
+    $('scEditModal').hidden = false;
+    scLoadConfig();
+  }
+  function scCloseEditor() { $('scEditModal').hidden = true; }
+  if ($('sconfigBtn')) {
+    $('sconfigBtn').addEventListener('click', scOpenRisk);
+  }
+  if ($('scRiskClose')) $('scRiskClose').addEventListener('click', scCloseRisk);
+  if ($('scRiskCancel')) $('scRiskCancel').addEventListener('click', scCloseRisk);
+  if ($('scEnterEdit')) $('scEnterEdit').addEventListener('click', function () {
+    if (this.disabled) return;
+    scOpenEditor();
+  });
+  if ($('scEditClose')) $('scEditClose').addEventListener('click', scCloseEditor);
+  if ($('scEditCancel')) $('scEditCancel').addEventListener('click', scCloseEditor);
+  if ($('scReload')) $('scReload').addEventListener('click', scLoadConfig);
+  if ($('scSave')) $('scSave').addEventListener('click', function () {
+    $('scErr').textContent = '';
+    var content = $('scText').value;
+    request.post('/ovpn/server', { action: 'updateConfig', content: content }).then(function (d) {
+      toast((d && d.message) || '已保存，需重启服务生效');
+      scCloseEditor();
+    }).catch(function (e) {
+      // 后端校验拒绝时保持弹窗打开，便于用户就地修改
+      $('scErr').textContent = (e && e.message) || '保存失败';
+    });
   });
 
   /* ---------- 侧边栏 / 抽屉 ---------- */

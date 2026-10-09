@@ -24,12 +24,26 @@ type captchaClickPoint struct {
 	Y int `json:"y"`
 }
 
-func setLoginFail(ip string) int {
+// loginFailKey 生成登录失败计数键。
+//
+// 安全加固（v1.0.98）：此前只用 IP 作键，而本应用的两条入口通道都拿不到可靠 IP——
+//   ① 统一网关（unix socket）下 RemoteAddr 为空，gin 的 ClientIP() 返回 ""，
+//      旧代码 `if ip == "" { return 0 }` 直接不计数 → 对外网关上暴力破解零成本；
+//   ② TCP 通道下 gin 默认信任 X-Forwarded-For，每请求换一个 XFF 即可换键绕过阈值。
+// 因此改为「IP + 用户名」双键：任一为空时仍有另一个兜底，
+// 且 IP 为空时用共享的全局键（"anon"）计数，确保永远不会出现"不计数"的通道。
+func loginFailKey(ip, username string) string {
 	if ip == "" {
-		return 0
+		ip = "anon"
 	}
+	if username == "" {
+		return "lf:" + ip
+	}
+	return "lf:" + ip + ":" + username
+}
 
-	key := "lf:" + ip
+func setLoginFail(ip, username string) int {
+	key := loginFailKey(ip, username)
 	if v, ok := cc.Get(key); ok {
 		if n, ok := v.(int); ok {
 			n++
@@ -43,26 +57,31 @@ func setLoginFail(ip string) int {
 	return 1
 }
 
-func getLoginFail(ip string) int {
-	if ip == "" {
-		return 0
-	}
-
-	if v, ok := cc.Get("lf:" + ip); ok {
-		if n, ok := v.(int); ok {
-			return n
+// getLoginFail 取失败次数：返回 IP 键与用户名键中的较大值。
+// 只查 IP 会让攻击者换 IP 后清零；只查用户名会让撞同一个账号的分布式攻击漏网。
+func getLoginFail(ip, username string) int {
+	n := 0
+	for _, k := range []string{"lf:" + orDefault(ip, "anon"), loginFailKey(ip, username)} {
+		if v, ok := cc.Get(k); ok {
+			if m, ok := v.(int); ok && m > n {
+				n = m
+			}
 		}
 	}
 
-	return 0
+	return n
 }
 
-func resetLoginFail(ip string) {
-	if ip == "" {
-		return
-	}
+func resetLoginFail(ip, username string) {
+	cc.Delete("lf:" + orDefault(ip, "anon"))
+	cc.Delete(loginFailKey(ip, username))
+}
 
-	cc.Delete("lf:" + ip)
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 func init() {

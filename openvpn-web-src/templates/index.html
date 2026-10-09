@@ -127,7 +127,10 @@
               <div style="display:flex;justify-content:space-between"><span style="color:var(--text-3)">证书</span><span class="badge on" id="siCert"><span class="dot"></span>有效</span></div>
               <div style="display:flex;justify-content:space-between;align-items:center"><span style="color:var(--text-3)">版本</span><span style="display:flex;align-items:center;gap:8px;justify-content:flex-end"><span class="badge" id="siUpdateBadge" hidden><span class="dot"></span><span id="siUpdateText"></span></span><span class="mono" id="siVersion">—</span></span></div>
             </div>
-            <button class="btn btn-sm" id="restartSrvBtn" style="margin-top:16px"><svg class="icon icon-sm"><use href="#i-bolt"/></svg>重启服务</button>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn btn-sm" id="restartSrvBtn" style="margin-top:16px"><svg class="icon icon-sm"><use href="#i-bolt"/></svg>重启服务</button>
+              <button class="btn btn-sm" id="sconfigBtn" style="margin-top:16px"><svg class="icon icon-sm"><use href="#i-edit"/></svg>配置文件</button>
+            </div>
           </div>
         </div>
       </section>
@@ -445,6 +448,55 @@
     <div class="modal-foot">
       <button class="btn" id="promptCancel">取消</button>
       <button class="btn btn-primary" id="promptOk">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- server.conf 风险须知：强制阅读 10 秒后才能进入编辑 -->
+<div class="overlay" id="scRiskModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="scRiskTitle">
+    <div class="modal-head">
+      <h3 id="scRiskTitle">编辑 server.conf（高级）</h3>
+      <button class="icon-btn" aria-label="关闭" id="scRiskClose" style="margin-left:auto"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="sc-risk" id="scRisk">
+        <p class="sc-risk-warn"><svg class="icon icon-sm"><use href="#i-shield"/></svg>请先完整阅读以下风险须知</p>
+        <ol>
+          <li>这是 OpenVPN 服务端的底层配置。<b>配置错误会导致 OpenVPN 无法启动，所有客户端立即断连</b>，且需要你手动修复才能恢复。</li>
+          <li>证书、密钥、钩子脚本、日志与管理接口地址属于<b>系统保留项</b>，不允许新增或改写；改写的内容会被服务端直接拒绝保存。</li>
+          <li>可执行的外部程序类指令（如 up / plugin / route-up 等）以及命令替换符号一律禁止，防止被利用提权。</li>
+          <li>保存后<b>需要点击「重启服务」才会生效</b>，重启期间已有连接会短暂中断。</li>
+          <li>建议先复制一份当前内容妥善备份，以便出错时还原。</li>
+          <li>端口、协议、子网、DNS、网关模式等常用项请在「设置」页修改，不要在这里手工改，避免与配置不同步。</li>
+        </ol>
+      </div>
+      <div class="err" id="scCountdown">请阅读风险须知（剩余 10 秒）</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="scRiskCancel">取消</button>
+      <button class="btn btn-primary" id="scEnterEdit" disabled>我已了解风险，继续编辑</button>
+    </div>
+  </div>
+</div>
+
+<!-- server.conf 编辑器 -->
+<div class="overlay" id="scEditModal" hidden>
+  <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="scEditTitle">
+    <div class="modal-head">
+      <h3 id="scEditTitle">server.conf</h3>
+      <button class="icon-btn" aria-label="关闭" id="scEditClose" style="margin-left:auto"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <textarea class="input mono" id="scText" rows="18" spellcheck="false" placeholder="载入中…"></textarea>
+      <div class="hint">保存后需点击「重启服务」生效。系统保留项与危险指令会被拒绝。</div>
+      <div class="err" id="scErr"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="scReload">重新载入</button>
+      <span style="flex:1"></span>
+      <button class="btn" id="scEditCancel">取消</button>
+      <button class="btn btn-primary" id="scSave">保存</button>
     </div>
   </div>
 </div>

@@ -92,6 +92,16 @@ init_config() {
 	if [ "$OVPN_IPV6_LISTEN" = "true" ]; then
 		OVPN_PROTO="${OVPN_PROTO}6"
 	fi
+	# v1.2.0：增量继承——先保留磁盘上现有的 server.conf，模板重建后把「不受
+	# config.json 管控」的用户自定义行追加回去。此前模板用 `cat >` 整文件覆盖，
+	# 用户在 Web UI 里手写的 route/push 等自定义配置每次冷启动都被抹掉
+	# （由 supervisor 每次启动调用 ensure_server 触发）。
+	# 管控指令集 = 模板中会写出的指令（由 config.json 驱动，必须以 config.json 为准，
+	# 否则会出现"改了 proto/port 不生效"）。这些行丢弃旧值；其余行原样继承。
+	local conf_file="$OVPN_DATA/server.conf"
+	local prev_conf=""
+	[ -f "$conf_file" ] && prev_conf="$(mktemp)" && cp "$conf_file" "$prev_conf"
+
 	cat <<EOF >"$OVPN_DATA/server.conf"
 port $OVPN_PORT
 proto $OVPN_PROTO
@@ -140,6 +150,40 @@ setenv auth_api http://127.0.0.1:$WEB_PORT/login
 setenv ovpn_auth_api http://127.0.0.1:$WEB_PORT/ovpn/login
 setenv ovpn_history_api http://127.0.0.1:$WEB_PORT/ovpn/history
 EOF
+
+	# 把用户自定义行追加回文件末尾（仅追加非管控指令，避免与 config.json 冲突）
+	if [ -n "$prev_conf" ] && [ -f "$prev_conf" ]; then
+		append_custom_conf "$prev_conf" "$OVPN_DATA/server.conf"
+		rm -f "$prev_conf"
+	fi
+}
+
+# append_custom_conf <旧配置> <新配置>
+# 把旧配置里不属于「模板管控指令集」的行追加到新配置末尾，保留用户手工修改。
+# 管控指令由 config.json 驱动（port/proto/server/push/…），必须以 config.json 为准；
+# 其余指令（如手写 route 192.168.x.0）原样继承。追加前去重，避免重复累积。
+append_custom_conf() {
+	local prev="$1" cur="$2"
+	[ -f "$prev" ] || return 0
+	# 管控指令集：模板会写出的所有指令 token
+	local managed=" port proto dev dev-type topology persist-key persist-tun keepalive
+		server server-ipv6 push dh tls-groups tls-crypt crl-verify ca cert key auth
+		cipher data-ciphers tls-server tls-version-min tls-cipher
+		auth-user-pass-verify client-disconnect client-connect script-security status
+		client-config-dir duplicate-cn client-to-client max-clients management user
+		group verb explicit-exit-notify setenv tun-mtu mssfix "
+	local tok line
+	while IFS= read -r line || [ -n "$line" ]; do
+		# 跳过空行与注释行：模板注释随配置变化，继承旧注释易产生误导性残留
+		tok="$(printf '%s' "$line" | awk '{print $1}')"
+		[ -z "$tok" ] && continue
+		case "$tok" in \#* | ';'*) continue ;; esac
+		# 管控指令：以 config.json 为准，丢弃旧行
+		case "$managed" in *" $tok "*) continue ;; esac
+		# 去重：新配置中已有完全相同的行则跳过
+		grep -qxF "$line" "$cur" && continue
+		printf '%s\n' "$line" >>"$cur"
+	done <"$prev"
 }
 
 ensure_server() {
@@ -459,8 +503,14 @@ set_firewall() {
 	WEB_PORT=$(jq -r '.system.base.web_port // "8833"' "$ovpn_data/config.json")
 	TOKEN=$(jq -r '.system.base.token // ""' "$ovpn_data/config.json")
 	ovpn_firewall_api="http://127.0.0.1:$WEB_PORT/ovpn/firewall?a=add_ovips"
-	data="vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&username=$username"
-	curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null -d "$data" "$ovpn_firewall_api" -H "O-Token: $TOKEN" >/dev/null
+	# v1.0.98：改用 --data-urlencode 逐字段编码。此前用 -d "vip=..&username=$username"
+	# 原样拼接，$username 来自 OpenVPN 环境变量，含 & 或 = 即可注入额外参数
+	# （例如把自己的 vip 改写成别人的地址）。
+	curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null \
+		--data-urlencode "vip=$ifconfig_pool_remote_ip" \
+		--data-urlencode "vip6=$ifconfig_pool_remote_ip6" \
+		--data-urlencode "username=$username" \
+		"$ovpn_firewall_api" -H "O-Token: $TOKEN" >/dev/null
 	set -e
 }
 
@@ -469,8 +519,11 @@ delete_firewall() {
 	WEB_PORT=$(jq -r '.system.base.web_port // "8833"' "$ovpn_data/config.json")
 	TOKEN=$(jq -r '.system.base.token // ""' "$ovpn_data/config.json")
 	ovpn_firewall_api="http://127.0.0.1:$WEB_PORT/ovpn/firewall?a=delete_ovips"
-	data="vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&username=$username"
-	curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null -d "$data" "$ovpn_firewall_api" -H "O-Token: $TOKEN" >/dev/null
+	curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null \
+		--data-urlencode "vip=$ifconfig_pool_remote_ip" \
+		--data-urlencode "vip6=$ifconfig_pool_remote_ip6" \
+		--data-urlencode "username=$username" \
+		"$ovpn_firewall_api" -H "O-Token: $TOKEN" >/dev/null
 	set -e
 }
 
@@ -489,8 +542,21 @@ add_history() {
 		time_unix="${time_unix:-0}"
 	fi
 	TOKEN=$(jq -r '.system.base.token // ""' "$ovpn_data/config.json")
-	data="action=$action&vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&rip=$trusted_ip&rip6=$trusted_ip6&common_name=$common_name&username=$username&bytes_received=$bytes_received&bytes_sent=$bytes_sent&time_unix=$time_unix&time_duration=${time_duration:-0}"
-	status=$(curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null -d "$data" "$ovpn_history_api" -H "O-Token: $TOKEN")
+	# v1.0.98：改用 --data-urlencode 逐字段编码（同上，防 &/= 参数注入），
+	# 且 curl 默认按 & 分隔，多个 --data-urlencode 会自动拼接。
+	status=$(curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null \
+		--data-urlencode "action=$action" \
+		--data-urlencode "vip=$ifconfig_pool_remote_ip" \
+		--data-urlencode "vip6=$ifconfig_pool_remote_ip6" \
+		--data-urlencode "rip=$trusted_ip" \
+		--data-urlencode "rip6=$trusted_ip6" \
+		--data-urlencode "common_name=$common_name" \
+		--data-urlencode "username=$username" \
+		--data-urlencode "bytes_received=$bytes_received" \
+		--data-urlencode "bytes_sent=$bytes_sent" \
+		--data-urlencode "time_unix=$time_unix" \
+		--data-urlencode "time_duration=${time_duration:-0}" \
+		"$ovpn_history_api" -H "O-Token: $TOKEN")
 	set -e
 }
 
@@ -546,7 +612,9 @@ case $1 in
 	exit 0
 	;;
 "genclient")
-	if [ -z $2 ]; then
+	# 安全加固（v1.0.98）：$2 未加引号时，参数含空格会报 [: too many arguments，
+	# 且 $2 为空会退化成 `[ -z ]`（恒真/异常）。统一加引号。
+	if [ -z "$2" ]; then
 		echo "请输入生成客户端名称！"
 		exit 1
 	fi
@@ -573,7 +641,8 @@ case $1 in
 	# 此前 web 直接 sudo easyrsa revoke，但 sudoers 白名单只授权 helper/iptables/chown，
 	# easyrsa 不被授权 → revoke 静默失败 → 证书残留 → 客户端计数虚高。
 	# 统一走 helper（sudoers 已授权），helper 内部以 root 调 easyrsa 并 chown 回 nobody。
-	if [ -z $2 ]; then
+	# 安全加固（v1.0.98）：$2 未加引号，空值与含空格参数都会误判（同上 genclient）
+	if [ -z "$2" ]; then
 		echo "请输入吊销客户端名称！"
 		exit 1
 	fi

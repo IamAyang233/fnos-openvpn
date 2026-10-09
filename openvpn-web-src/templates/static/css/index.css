@@ -266,6 +266,17 @@
 
   .empty { text-align: center; color: var(--text-3); padding: 30px; font-size: 13px; }
 
+  /* server.conf 编辑：宽弹窗 + 风险须知区块 + 等宽多行文本框 */
+  .overlay .modal.modal-lg { width: 780px; }
+  .sc-risk { max-height: 46vh; overflow-y: auto; padding: 14px 16px; background: var(--surface-2, rgba(127,127,127,.06)); border: 1px solid var(--border-2); border-radius: var(--radius); font-size: 13px; line-height: 1.7; }
+  .sc-risk ol { margin: 8px 0 0; padding-left: 20px; }
+  .sc-risk li { margin-bottom: 6px; }
+  .sc-risk li:last-child { margin-bottom: 0; }
+  .sc-risk-warn { display: flex; align-items: center; gap: 6px; margin: 0; font-weight: 700; color: var(--danger); }
+  .sc-risk-warn .icon { flex: none; }
+  textarea.input.mono { width: 100%; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; white-space: pre; tab-size: 4; }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+
   /* extra: responsive table scroll + small fixes */
   .table-scroll { width: 100%; overflow-x: auto; }
 
