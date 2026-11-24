@@ -414,10 +414,116 @@
     .steps { font-size: 11px; }
   }
 
-  /* 关于页卡片：≤480px 解除 min-width，纵向堆叠 */
-  @media (max-width: 480px) {
-    .card { padding: 16px; }
-    section[data-panel="about"] > div[style*="display:flex"] { flex-direction: column; }
-    section[data-panel="about"] .card[style*="min-width"] { min-width: 0; flex: 1 1 100%; }
-    .stat .v { font-size: 22px; }
+  /* ============ 关于页（熊猫象棋式双栏卡片） ============ */
+  .about-wrap { max-width: 640px; margin: 0 auto; padding: 8px 2px 32px; }
+  .about-grid { display: block; }
+  .about-col { min-width: 0; }
+  .about-col .about-card { margin-bottom: 16px; }
+  .about-card h3 {
+    margin: 0 0 14px; font-size: 15px; letter-spacing: 1px;
+    padding-bottom: 10px; border-bottom: 1px solid var(--border);
   }
+  .about-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .about-changelog { margin-top: 10px; }
+  .about-text p { font-size: 13px; color: var(--text-2); line-height: 1.9; margin: 0; }
+
+  /* 赞赏区 */
+  .about-sponsor .sponsor-note { font-size: 13px; color: var(--text-2); line-height: 1.8; margin: 0 0 14px; }
+  .sponsor-card {
+    display: block; width: 200px; max-width: 70%; margin: 0 auto 8px;
+    background: #fff; padding: 10px; border-radius: 12px;
+    border: 1px solid var(--border); box-shadow: var(--shadow-sm);
+  }
+  .sponsor-card img { display: block; width: 100%; height: auto; border-radius: 6px; }
+  .sponsor-slogan { text-align: center; color: var(--text-2); font-size: 14px; margin: 10px 0 2px; }
+
+  /* 赞赏名单：>5 条时无缝上下循环滚动 */
+  .sponsor-list { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .sponsor-list h4 { font-size: 13px; color: var(--text-2); margin: 0 0 10px; letter-spacing: 1px; }
+  .sponsor-viewport { max-height: 210px; overflow: hidden; mask-image: linear-gradient(to bottom, transparent, #000 12px, #000 calc(100% - 12px), transparent); -webkit-mask-image: linear-gradient(to bottom, transparent, #000 12px, #000 calc(100% - 12px), transparent); }
+  .sponsor-track { display: flex; flex-direction: column; gap: 6px; }
+  .sponsor-track.scrolling { animation: sponsor-scroll 18s linear infinite; }
+  .sponsor-viewport:hover .sponsor-track.scrolling { animation-play-state: paused; }
+  .sponsor-row {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+    padding: 7px 10px; border-radius: 8px; font-size: 13px; flex: none;
+    background: var(--surface-2); border: 1px solid var(--border-2);
+  }
+  .sponsor-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sponsor-amount { color: var(--primary); flex: none; font-variant-numeric: tabular-nums; }
+  @keyframes sponsor-scroll { from { transform: translateY(0); } to { transform: translateY(-50%); } }
+
+  @media (min-width: 900px) {
+    .about-wrap { max-width: 1020px; padding: 12px 4px 40px; }
+    .about-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(300px, .9fr); gap: 20px; align-items: start; }
+    .about-col { display: flex; flex-direction: column; }
+    .about-col .about-card { margin-bottom: 0; }
+    .about-col { gap: 20px; }
+    .about-card { padding: 20px 22px; }
+    .about-card h3 { font-size: 15px; letter-spacing: 2px; }
+    .about-sponsor .sponsor-card { max-width: 220px; }
+    .about-update .about-changelog { max-height: 260px; overflow-y: auto; }
+  }
+  @media (max-width: 480px) {
+    .sponsor-viewport { max-height: 180px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sponsor-track.scrolling { animation: none; }
+    .sponsor-viewport { overflow-y: auto; }
+  }
+
+  /* ============ 备份与恢复 ============ */
+  .backup-wrap { max-width: 640px; margin: 0 auto; padding: 8px 2px 32px; }
+  .backup-grid { display: block; }
+  .backup-card { margin-bottom: 16px; }
+  .backup-card h3 {
+    margin: 0 0 14px; font-size: 15px; letter-spacing: 1px;
+    padding-bottom: 10px; border-bottom: 1px solid var(--border);
+  }
+  .backup-note { font-size: 13px; color: var(--text-2); line-height: 1.8; margin: 0 0 14px; }
+  .backup-note code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .backup-scope {
+    display: grid; gap: 8px; margin-bottom: 14px; padding: 12px 14px;
+    background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+  }
+  .backup-scope > div { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+  .backup-scope .icon { color: var(--success); flex: none; }
+  .backup-info {
+    font-size: 12px; color: var(--text-3); padding: 10px 12px;
+    background: var(--surface-2); border-radius: var(--radius-sm); margin-bottom: 14px;
+  }
+  .backup-actions { display: flex; justify-content: flex-end; }
+  .backup-card-danger { border-color: var(--danger); }
+  .backup-card-danger h3 { border-bottom-color: rgba(229,69,69,.3); }
+  .backup-warn {
+    display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px;
+    padding: 12px 14px; border-radius: var(--radius-sm);
+    background: var(--danger-soft); border: 1px solid var(--danger);
+    font-size: 13px; color: var(--text); line-height: 1.7;
+  }
+  .backup-warn b { color: var(--danger); }
+  .backup-file {
+    display: block; width: 100%; padding: 10px 12px; font-size: 13px;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+    color: var(--text); cursor: pointer;
+  }
+  .backup-file::file-selector-button {
+    padding: 6px 12px; margin-right: 10px; border: none; border-radius: 6px;
+    background: var(--primary); color: #fff; cursor: pointer; font: inherit;
+  }
+  @media (min-width: 900px) {
+    .backup-wrap { max-width: 1020px; padding: 12px 4px 40px; }
+    .backup-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+    .backup-card { margin-bottom: 0; }
+    .backup-card { padding: 20px 22px; }
+  }
+
+  .backup-location {
+    display: flex; align-items: flex-start; gap: 8px; margin-bottom: 14px; padding: 10px 12px;
+    font-size: 12px; line-height: 1.7; color: var(--text-2);
+    background: var(--primary-soft); border: 1px solid var(--primary); border-radius: var(--radius-sm);
+  }
+  .backup-location .icon { color: var(--primary); flex: none; margin-top: 2px; }
+  .backup-location b { color: var(--text); }
+  .backup-location code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; word-break: break-all; }
+  .backup-location-path code { color: var(--primary); }

@@ -1,8 +1,8 @@
 appname         = openvpn
-version         = 1.1.1
+version         = 1.1.3
 display_name    = OpenVPN 服务器
 desc            = <b>OpenVPN 服务器</b> 为飞牛私有云 (fnOS) 提供基于 OpenVPN 的 VPN 服务，让你在外网也能安全连回家庭网络，访问飞牛与内网设备。<br><br><b>功能：</b><br>- 内置 Web 管理界面（默认账号 admin / admin，建议首次登录修改密码）：生成/下载客户端配置、证书管理、账号与 MFA、连接历史、在线编辑 server.conf、一键重启<br>- 社区版 OpenVPN，无并发连接数限制，可创建任意数量客户端<br>- 证书由内置 easyrsa 离线生成，客户端配置导出即用<br>- Web 管理界面经统一网关 /app/openvpn 打开（复用 NAS 登录态，不对外暴露独立端口）<br>- VPN 接入端口 UDP/TCP 1194（可在设置页切换）<br>- 数据（证书 / 配置 / 数据库）持久化到应用数据卷，重装或升级不丢失<br><br><b>适用前提：</b><br>- 从外网连接需在路由器转发 UDP/TCP 1194 端口（端口转发 / DDNS / 公网 IP）<br>- 需 root 启动以创建 TUN 设备并加载 nft 防火墙规则（官方权限规范允许的必要场景）；OpenVPN 数据通道已按官方建议降权至 nobody 运行<br><br><b>来源与许可：</b>OpenVPN 为 GPLv2（Community Edition）。本 FPK 由 Panda（www.aykeji.cn）打包发布。<br><b>项目仓库：</b>https://github.com/IamAyang233/fnos-openvpn
-changelog       = 【v1.1.1】新增 server.conf 在线编辑（打开时需阅读风险须知）；修复重启应用后 server.conf 中的自定义配置被重置的问题。
+changelog       = 【v1.1.2】新增「备份与恢复」页：核心数据（证书/数据库/配置/客户端）一键打包下载（SHA256 校验），上传备份包即可一键恢复并自动重载服务；恢复前自动留一份临时快照。关于页改为双栏布局并新增赞赏区与赞赏名单（>5 条循环滚动）。 【v1.1.1】新增 server.conf 在线编辑（打开时需阅读风险须知）；修复重启应用后 server.conf 中的自定义配置被重置的问题。
 platform        = x86
 source          = thirdparty
 maintainer      = Panda

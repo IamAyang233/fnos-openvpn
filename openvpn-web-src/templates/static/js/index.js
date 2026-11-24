@@ -225,7 +225,7 @@
   if (window.innerWidth <= 920) app.classList.add('collapsed');
 
   /* ---------- 导航切换 ---------- */
-  var titleMap = { dashboard: '仪表盘', clients: '客户端', users: '用户', groups: '分组', certs: '证书', history: '连接记录', settings: '设置' };
+  var titleMap = { dashboard: '仪表盘', clients: '客户端', users: '用户', groups: '分组', certs: '证书', history: '连接记录', settings: '设置', backup: '备份与恢复', about: '关于' };
   function showPanel(s) {
     document.querySelectorAll('.nav-item').forEach(function (n) { n.classList.toggle('active', n.dataset.screen === s); });
     document.querySelectorAll('[data-panel]').forEach(function (p) { p.hidden = p.dataset.panel !== s; });
@@ -238,6 +238,8 @@
     else if (s === 'certs') loadCerts();
     else if (s === 'history') loadHistory();
     else if (s === 'settings') loadSettings();
+    else if (s === 'backup') loadBackupInfo();
+    else if (s === 'about') { if (typeof checkUpdate === 'function') checkUpdate(true); if (typeof loadSponsors === 'function') loadSponsors(); }
     if (window.innerWidth <= 920) closeDrawer();
   }
   document.querySelectorAll('.nav-item').forEach(function (a) {
@@ -568,6 +570,60 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m];
     });
   }
+  /* ---------- 备份与恢复 ---------- */
+  function loadBackupInfo() {
+    var box = $('backupInfo');
+    if (!box) return;
+    request.get('/ovpn/backup/info', { silent: true }).then(function (d) {
+      if (!d) return;
+      var mb = (Number(d.bytes || 0) / 1048576).toFixed(2);
+      var s = '核心数据 ' + (d.files || 0) + ' 个文件，约 ' + mb + ' MB（版本 ' + (d.version || '-') + '）';
+      if (d.dataDir) s += ' · 数据目录：' + d.dataDir;
+      if (d.hasUndo) s += ' · 恢复前快照：' + (d.undoTime || '存在');
+      box.textContent = s;
+      // 快照实际路径（恢复卡里），未生成时给出将存放的位置
+      var up = $('undoPath');
+      if (up) up.textContent = (d.undoPath || (d.dataDir ? d.dataDir + '/.restore-undo.tar.gz' : '（读取失败）')) + (d.hasUndo ? '' : '（尚未生成）');
+    }).catch(function () { box.textContent = '备份概览读取失败'; });
+  }
+  // 下载备份：后端实时流式打包，直接触发浏览器下载（复用 CA 下载模式）。
+  $('backupDownload').addEventListener('click', function () {
+    var a = document.createElement('a');
+    a.href = BASE + '/ovpn/backup';
+    a.download = '';
+    document.body.appendChild(a); a.click(); a.remove();
+    toast('备份下载已开始');
+  });
+  // 恢复备份：FormData 上传（request.go 硬编码 URLSearchParams，不能复用），
+  // 必须手动带 X-Requested-With 以满足后端 CSRF 校验。
+  $('restoreBtn').addEventListener('click', function () {
+    var input = $('restoreFile'), err = $('restoreErr'), btn = this;
+    if (err) err.textContent = '';
+    var file = input && input.files && input.files[0];
+    if (!file) { if (err) err.textContent = '请先选择备份文件'; return; }
+    if (!confirm('警告：恢复会覆盖当前全部核心数据（证书/用户/配置），并自动重载服务。\n当前登录密码可能失效，需要使用备份时的密码重新登录。\n\n确定继续吗？')) return;
+    btn.disabled = true;
+    var fd = new FormData(); fd.append('file', file);
+    fetch(BASE + '/ovpn/restore', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd,
+      redirect: 'manual'
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) {
+        if (r.status === 401) { location.href = BASE + '/login'; return; }
+        if (!r.ok) throw new Error((body && body.message) || ('恢复失败 ' + r.status));
+        toast((body && body.message) || '恢复成功');
+        if (input) input.value = '';
+        if (err) err.textContent = '服务正在重启，请稍候用备份中的管理员密码重新登录…';
+        // web 进程会自行退出并由 supervisor 拉起，等它恢复后再跳登录页
+        setTimeout(function () { location.href = BASE + '/login'; }, 5000);
+      });
+    }).catch(function (e) {
+      if (err) err.textContent = (e && e.message) || '恢复失败';
+    }).then(function () { btn.disabled = false; });
+  });
+
   function checkUpdate(silent) {
     var btn = $('checkUpdateBtn'), st = $('updateStatus');
     if (btn) btn.disabled = true;
@@ -630,12 +686,46 @@
   if (checkBtn) checkBtn.addEventListener('click', function () { checkUpdate(false); });
   var fbBtn = $('fbSubmit');
   if (fbBtn) fbBtn.addEventListener('click', submitFeedback);
-  // 进入关于页自动检查一次（静默）
-  document.querySelectorAll('.nav-item').forEach(function (a) {
-    a.addEventListener('click', function () {
-      if (a.dataset.screen === 'about') checkUpdate(true);
-    });
-  });
+
+  // 赞赏名单：来自同源代理 /ovpn/sponsors（后端从 Panda 公开接口取，只回传 name/amount）。
+  // >5 条时把列表复制一份接在后面，配合 CSS translateY(-50%) 实现无缝上下循环；≤5 条静态展示。
+  function renderSponsors(list) {
+    var box = $('sponsorList'), track = $('sponsorTrack');
+    if (!box || !track) return;
+    if (!Array.isArray(list) || !list.length) { box.hidden = true; return; }
+    box.hidden = false;
+
+    function buildRows(source) {
+      var frag = document.createDocumentFragment();
+      source.forEach(function (s) {
+        var row = document.createElement('div'); row.className = 'sponsor-row';
+        var name = document.createElement('span'); name.className = 'sponsor-name';
+        name.textContent = String(s.name == null ? '' : s.name);
+        var amt = document.createElement('span'); amt.className = 'sponsor-amount';
+        amt.textContent = String(s.amount == null ? '' : s.amount);
+        row.appendChild(name); row.appendChild(amt); frag.appendChild(row);
+      });
+      return frag;
+    }
+
+    track.innerHTML = '';
+    track.classList.remove('scrolling');
+    if (list.length > 5) {
+      track.appendChild(buildRows(list));
+      track.appendChild(buildRows(list)); // 第二份用于无缝循环
+      track.classList.add('scrolling');
+    } else {
+      track.appendChild(buildRows(list));
+    }
+  }
+  function loadSponsors() {
+    request.get('/ovpn/sponsors', { silent: true }).then(function (d) {
+      if (!d || d.ok === false || d.visible === false) { var b = $('sponsorList'); if (b) b.hidden = true; return; }
+      renderSponsors(d.sponsors);
+    }).catch(function () { var b = $('sponsorList'); if (b) b.hidden = true; });
+  }
+
+  // 进入关于页的加载统一由 showPanel('about') 负责（见上方），此处不再重复绑定。
 
   /* ---------- 客户端 ---------- */
   function downloadClient(name) {

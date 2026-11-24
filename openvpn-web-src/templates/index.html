@@ -30,6 +30,7 @@
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></symbol>
     <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 21V9M7 14l5-5 5 5M5 3h14"/></symbol>
+    <symbol id="i-backup" viewBox="0 0 24 24"><path d="M4 7a8 8 0 0 1 13.7-4.6L20 5"/><path d="M20 3v4h-4"/><path d="M20 17a8 8 0 0 1-13.7 4.6L4 19"/><path d="M4 21v-4h4"/><rect x="9" y="9" width="6" height="6" rx="1"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
@@ -59,6 +60,7 @@
         <a class="nav-item" data-screen="certs" href="#"><svg class="icon"><use href="#i-cert"/></svg><span class="nav-label">证书</span></a>
         <a class="nav-item" data-screen="history" href="#"><svg class="icon"><use href="#i-history"/></svg><span class="nav-label">连接记录</span></a>
         <a class="nav-item" data-screen="settings" href="#"><svg class="icon"><use href="#i-gear"/></svg><span class="nav-label">设置</span></a>
+        <a class="nav-item" data-screen="backup" href="#"><svg class="icon"><use href="#i-backup"/></svg><span class="nav-label">备份与恢复</span></a>
         <a class="nav-item" data-screen="about" href="#"><svg class="icon"><use href="#i-info"/></svg><span class="nav-label">关于</span></a>
       </div>
     </nav>
@@ -291,39 +293,107 @@
           </div>
         </div>
       </section>
-      <section data-panel="about" hidden>
-        <div class="section-head"><h2>关于</h2><div class="spacer"></div></div>
-        <div class="card" style="margin-bottom:16px">
-          <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-            <h3 style="margin:0">检查更新</h3>
-            <button class="btn btn-primary" id="checkUpdateBtn"><svg class="icon icon-sm"><use href="#i-refresh"/></svg>检查更新</button>
-            <span id="updateStatus" class="hint" style="margin:0"></span>
+
+      <section data-panel="backup" hidden>
+        <div class="backup-wrap">
+          <div class="backup-grid">
+            <div class="card backup-card">
+              <h3>创建备份</h3>
+              <p class="backup-note">把当前 VPN 的核心数据打包下载为一个 <code>.tar.gz</code> 文件，带 SHA256 校验。建议妥善保管——备份中包含 CA 根证书、客户端私钥、用户数据与管理员密码哈希。</p>
+              <div class="backup-scope">
+                <div><svg class="icon icon-sm"><use href="#i-check"/></svg>证书与私钥（pki/，含 CA 与 tls-crypt）</div>
+                <div><svg class="icon icon-sm"><use href="#i-check"/></svg>用户 / 分组 / 连接记录 / 防火墙（ovpn.db）</div>
+                <div><svg class="icon icon-sm"><use href="#i-check"/></svg>配置（config.json / server.conf）</div>
+                <div><svg class="icon icon-sm"><use href="#i-check"/></svg>客户端专属配置与已生成 .ovpn（ccd/ / clients/）</div>
+              </div>
+              <div class="backup-info" id="backupInfo">正在读取备份概览…</div>
+              <div class="backup-location">
+                <svg class="icon icon-sm"><use href="#i-download"/></svg>
+                <span>点击下载后，备份文件会保存到<b>浏览器的默认下载目录</b>（文件名 <code>openvpn-backup_版本_日期.tar.gz</code>），不会留在 NAS 上。</span>
+              </div>
+              <div class="backup-actions">
+                <button class="btn btn-primary" id="backupDownload"><svg class="icon icon-sm"><use href="#i-download"/></svg>下载备份</button>
+              </div>
+            </div>
+
+            <div class="card backup-card backup-card-danger">
+              <h3>恢复备份</h3>
+              <div class="backup-warn">
+                <b>警告：恢复会覆盖当前全部核心数据！</b>
+                <span>恢复后服务会自动重新加载，连接会短暂中断。请使用<b>备份当时</b>的管理员密码登录；当前密码可能失效。</span>
+              </div>
+              <div class="field">
+                <label>选择备份文件（.tar.gz）</label>
+                <input type="file" id="restoreFile" accept=".tar.gz,application/gzip" class="backup-file" />
+              </div>
+              <p class="backup-note">恢复前系统会自动生成一份「恢复前快照」（仅保留最近一份）供出错时回滚；不做定期快照。快照保存在 NAS 应用数据目录：</p>
+              <div class="backup-location backup-location-path">
+                <svg class="icon icon-sm"><use href="#i-backup"/></svg>
+                <code id="undoPath">读取中…</code>
+              </div>
+              <div class="backup-actions">
+                <button class="btn btn-danger" id="restoreBtn"><svg class="icon icon-sm"><use href="#i-upload"/></svg>开始恢复</button>
+              </div>
+              <div class="err" id="restoreErr"></div>
+            </div>
           </div>
-          <div id="updateResult" hidden style="margin-top:10px"></div>
         </div>
-        <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
-          <div class="card" style="flex:2;min-width:320px">
-            <h3>更新日志</h3>
-            <div id="changelogList" class="hint">点击「检查更新」查看历史版本记录。</div>
-          </div>
-          <div class="card" style="flex:1;min-width:300px">
-            <h3>Bug 反馈</h3>
-            <div class="field"><label>类别</label><select class="input" id="fbCategory"><option value="连接问题">连接问题</option><option value="客户端管理">客户端管理</option><option value="用户/权限">用户/权限</option><option value="界面问题">界面问题</option><option value="升级安装">升级安装</option><option value="其他">其他</option></select></div>
-            <div class="field"><label>标题 <b style="color:var(--danger,#e5484d)">*</b></label><input class="input" id="fbTitle" placeholder="简要描述问题" /></div>
-            <div class="field"><label>详细描述</label><textarea class="input" id="fbDesc" rows="4" placeholder="复现步骤、期望行为、实际表现等"></textarea></div>
-            <div class="field"><label>联系方式（可选）</label><input class="input" id="fbContact" placeholder="邮箱 / 手机号，便于跟进" /></div>
-            <div class="field">
-              <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                <input type="checkbox" id="fbLogs" checked style="width:16px;height:16px;accent-color:var(--accent,#4f7cff)" />
-                附带系统日志
-              </label>
-              <div class="hint">勾选后将附上应用版本、服务端协议及 Web 后端 / 辅助脚本日志（含错误上下文，约 1000 行上限），便于排查；日志中不含密码与密钥。</div>
-              <div class="hint" style="color:#e5484d;margin-top:6px">交流QQ群：511725692</div>
+      </section>
+
+      <section data-panel="about" hidden>
+        <div class="about-wrap">
+          <div class="about-grid">
+            <div class="about-col about-col-main">
+              <div class="card about-card about-update">
+                <h3>检查更新</h3>
+                <div class="about-row">
+                  <button class="btn btn-primary" id="checkUpdateBtn"><svg class="icon icon-sm"><use href="#i-refresh"/></svg>检查更新</button>
+                  <span id="updateStatus" class="hint" style="margin:0"></span>
+                </div>
+                <div id="updateResult" hidden style="margin-top:10px"></div>
+                <div id="changelogList" class="about-changelog hint">点击「检查更新」查看历史版本记录。</div>
+              </div>
+
+              <div class="card about-card about-feedback">
+                <h3>Bug 反馈</h3>
+                <div class="field"><label>类别</label><select class="input" id="fbCategory"><option value="连接问题">连接问题</option><option value="客户端管理">客户端管理</option><option value="用户/权限">用户/权限</option><option value="界面问题">界面问题</option><option value="升级安装">升级安装</option><option value="其他">其他</option></select></div>
+                <div class="field"><label>标题 <b style="color:var(--danger)">*</b></label><input class="input" id="fbTitle" placeholder="简要描述问题" /></div>
+                <div class="field"><label>详细描述</label><textarea class="input" id="fbDesc" rows="4" placeholder="复现步骤、期望行为、实际表现等"></textarea></div>
+                <div class="field"><label>联系方式（可选）</label><input class="input" id="fbContact" placeholder="邮箱 / 手机号，便于跟进" /></div>
+                <div class="field">
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" id="fbLogs" checked style="width:16px;height:16px;accent-color:var(--primary)" />
+                    附带系统日志
+                  </label>
+                  <div class="hint">勾选后将附上应用版本、服务端协议及 Web 后端 / 辅助脚本日志（含错误上下文，约 1000 行上限），便于排查；日志中不含密码与密钥。</div>
+                  <div class="hint" style="color:var(--danger);margin-top:6px">交流QQ群：511725692</div>
+                </div>
+                <div class="about-row" style="justify-content:flex-end;margin-top:6px">
+                  <button class="btn btn-primary" id="fbSubmit"><svg class="icon icon-sm"><use href="#i-send"/></svg>提交反馈</button>
+                </div>
+                <div class="err" id="fbErr"></div>
+              </div>
             </div>
-            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:6px">
-              <button class="btn btn-primary" id="fbSubmit"><svg class="icon icon-sm"><use href="#i-send"/></svg>提交反馈</button>
+
+            <div class="about-col about-col-side">
+              <div class="card about-card about-sponsor">
+                <h3>赞赏</h3>
+                <p class="sponsor-note">如果这款应用帮到了你，欢迎请作者喝杯茶</p>
+                <div class="sponsor-card"><img src="static/sponsor-qr.jpg" alt="Panda 的赞赏码" loading="lazy"></div>
+                <p class="sponsor-slogan">您的支持，是我最大的动力！</p>
+                <div class="sponsor-list" id="sponsorList" hidden>
+                  <h4>赞赏名单</h4>
+                  <div class="sponsor-viewport" id="sponsorViewport">
+                    <div class="sponsor-track" id="sponsorTrack"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card about-card about-text">
+                <h3>关于本应用</h3>
+                <p>为飞牛私有云 (fnOS) 打造的 OpenVPN 服务器一键安装包。内置 Web 管理界面与离线证书签发，支持客户端/用户/分组管理、限速与禁网、MFA 双因子认证，社区版无并发连接数限制。数据持久化到应用数据卷，重装或升级不丢失。</p>
+              </div>
             </div>
-            <div class="err" id="fbErr"></div>
           </div>
         </div>
       </section>

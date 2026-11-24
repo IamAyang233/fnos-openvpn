@@ -341,11 +341,6 @@ cp -af "$FNOS_DIR/config" "$PKG_DIR/"
 cp -af "$FNOS_DIR/wizard" "$PKG_DIR/" 2>/dev/null || true
 cp "$FNOS_DIR"/*.sc "$PKG_DIR/" 2>/dev/null || true
 cp "$FNOS_DIR"/ICON*.PNG "$PKG_DIR/" 2>/dev/null || true
-# fnOS 首页图标约定文件名为 ICON.png（小写）。tar 后端在 Linux 上直接产出 ICON.png；
-# python 后端（Windows 大小写不敏感）由 PY_PKG 以 ICON.png 名义追加进 fpk，无需 cp。
-if [ "$PKG_BACKEND" = "tar" ]; then
-    cp -f "$FNOS_DIR/ICON_256.PNG" "$PKG_DIR/ICON.png" 2>/dev/null || true
-fi
 # 桌面入口 ui 已打进 app.tgz 的 app/ui/，fpk 顶层不再放 ui 目录
 # （顶层 ui/ 不会被 fnOS 识别为入口，详见上方 app.tgz 段落）
 cp "$FNOS_DIR/manifest" "$PKG_DIR/manifest"
@@ -376,8 +371,9 @@ FPK_NAME="${APPNAME}_${VERSION}_${PLATFORM:-x86}.fpk"
 info "打包 -> $FPK_NAME ..."
 cd "$PKG_DIR"
 if [ "$PKG_BACKEND" = "tar" ]; then
-    # GNU tar 打包 fpk：先 chmod staging 副本（cmd 0755 / 其余 0644），tar 保留权限。
-    # ICON.png（小写，fnOS 首页图标约定）已在上方 tar 后端分支复制到 package 目录。
+    # GNU tar 打包 fpk：保持与历史可安装版本完全一致的归档结构。
+    # （ICON.png 小写在 Windows 大小写不敏感文件系统上无法与 ICON.PNG 共存，
+    #   历史可安装版本也只有 ICON.PNG/ICON_256.PNG，fnOS 并不要求小写。）
     chmod -R 0755 "$PKG_DIR/cmd" 2>/dev/null || true
     find "$PKG_DIR" -type f ! -path "$PKG_DIR/cmd/*" -exec chmod 0644 {} + 2>/dev/null || true
     tar -czf "$SCRIPT_DIR/$FPK_NAME" --owner=0 --group=0 --transform 's|^\./||' -C "$PKG_DIR" .

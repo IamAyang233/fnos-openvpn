@@ -291,6 +291,21 @@ func (ov *ovpn) sendCommand(command string) (string, error) {
 	return data, nil
 }
 
+// reloadServices 收敛服务到当前磁盘配置：config.json → server.conf 同步、
+// 重建 NAT/IP 转发（内存态）、通过管理口 SIGHUP 让 openvpn 重新加载。
+// 「重启服务」按钮与「恢复备份」共用，保证恢复后自动生效。
+func reloadServices(ov *ovpn) error {
+	upadteOvpnConfig()
+	if out, err := privExec(ovpnHelper, "ensure_nat").CombinedOutput(); err != nil {
+		if len(out) == 0 {
+			out = []byte(err.Error())
+		}
+		logger.Error(context.Background(), "ensure_nat: "+string(out))
+	}
+	_, err := ov.sendCommand("signal SIGHUP")
+	return err
+}
+
 func (ov *ovpn) getClient() []ClientData {
 	clients := make([]ClientData, 0)
 
@@ -1283,6 +1298,128 @@ func main() {
 			c.JSON(http.StatusOK, out)
 		})
 
+		// GET /ovpn/sponsors —— 赞赏名单（同源代理 www.aykeji.cn/api/public/sponsors）。
+		//  CSP 为 connect-src 'self'，前端不能直连外域；这里只挑 name/amount 两个
+		//  字符串字段回传，杜绝把远端其它字段带进页面。
+		ovpn.GET("/sponsors", func(c *gin.Context) {
+			u := strings.TrimRight(feedbackAPI(), "/") + "/api/public/sponsors"
+			client := &http.Client{Timeout: 8 * time.Second}
+			resp, err := client.Get(u)
+			if err != nil {
+				c.JSON(http.StatusOK, gin.H{"ok": false, "sponsors": []interface{}{}})
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			var raw struct {
+				OK       bool `json:"ok"`
+				Visible  bool `json:"visible"`
+				Sponsors []struct {
+					Name   string `json:"name"`
+					Amount string `json:"amount"`
+					Raw    string `json:"raw"`
+				} `json:"sponsors"`
+			}
+			if json.Unmarshal(body, &raw) != nil || !raw.OK || raw.Sponsors == nil {
+				c.JSON(http.StatusOK, gin.H{"ok": false, "sponsors": []interface{}{}})
+				return
+			}
+			type sponsor struct {
+				Name   string `json:"name"`
+				Amount string `json:"amount"`
+			}
+			list := make([]sponsor, 0, len(raw.Sponsors))
+			for _, s := range raw.Sponsors {
+				name := strings.TrimSpace(s.Name)
+				if name == "" {
+					name = strings.TrimSpace(s.Raw)
+				}
+				if name == "" {
+					name = "匿名支持者"
+				}
+				list = append(list, sponsor{Name: name, Amount: strings.TrimSpace(s.Amount)})
+			}
+			c.JSON(http.StatusOK, gin.H{"ok": true, "visible": raw.Visible, "sponsors": list})
+		})
+
+		// ---- 配置备份 / 一键恢复 ----
+		// GET /ovpn/backup/info —— 备份概览（文件数/大小/临时快照状态），供 UI 展示
+		ovpn.GET("/backup/info", func(c *gin.Context) {
+			c.JSON(http.StatusOK, getBackupInfo())
+		})
+
+		// GET /ovpn/backup —— 实时流式生成 tar.gz 备份（不落盘，避免 clients/ StaticFS 暴露私钥）
+		ovpn.GET("/backup", func(c *gin.Context) {
+			name := fmt.Sprintf("openvpn-backup_%s_%s.tar.gz", version, time.Now().Format("20060102-1504"))
+			c.Header("Content-Type", "application/gzip")
+			c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", name))
+			c.Header("Cache-Control", "no-cache")
+			if err := writeBackup(ovData, version, c.Writer); err != nil {
+				logger.Error(context.Background(), "backup: "+err.Error())
+				// 响应头已发出，无法再改 JSON；记录日志并结束流。
+				return
+			}
+		})
+
+		// POST /ovpn/restore —— 上传备份包并一键恢复（校验 → 临时快照 → 覆盖 → 重载）
+		ovpn.POST("/restore", func(c *gin.Context) {
+			file, err := c.FormFile("file")
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "请选择备份文件"})
+				return
+			}
+			if file.Size <= 0 || file.Size > backupMaxTotal {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "备份文件大小异常"})
+				return
+			}
+			src, err := file.Open()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "读取备份文件失败"})
+				return
+			}
+			defer src.Close()
+
+			tmp, err := os.MkdirTemp("", "ovpn-restore-*")
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "创建临时目录失败"})
+				return
+			}
+			defer os.RemoveAll(tmp)
+
+			entries, err := readAndValidateBackup(io.LimitReader(src, backupMaxTotal+1), tmp)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "备份校验失败：" + err.Error()})
+				return
+			}
+
+			// 恢复前留一份临时快照（单份），供出错时手工回滚
+			if err := makePreRestoreSnapshot(version); err != nil {
+				logger.Error(context.Background(), "pre-restore snapshot: "+err.Error())
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "创建恢复前快照失败，已中止恢复：" + err.Error()})
+				return
+			}
+			if err := applyRestore(tmp, entries); err != nil {
+				logger.Error(context.Background(), "restore: "+err.Error())
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "恢复失败：" + err.Error() + "（恢复前快照已保留为 .restore-undo.tar.gz）"})
+				return
+			}
+			if err := reloadServices(&ov); err != nil {
+				logger.Error(context.Background(), "restore reload: "+err.Error())
+				c.JSON(http.StatusOK, gin.H{"message": "配置已恢复，但服务重载失败，请手动点击「重启服务」", "warning": err.Error()})
+				return
+			}
+			// 恢复成功后必须重启 web 进程：session store（gormsessions）在启动时绑定了
+			// 旧的 *gorm.DB 与旧 secretKey，而恢复替换了 ovpn.db 与 config.json，
+			// 继续用旧 store 会导致登录写不进 session（Set-Cookie 缺失、永远登不上）。
+			// supervisor 的 run_web 保活循环会自动把本进程拉起，届时 db/secretKey/store 全部重建。
+			// 先发送响应，再异步退出，保证客户端能收到成功消息。
+			go func() {
+				time.Sleep(500 * time.Millisecond)
+				os.Exit(0)
+			}()
+			c.JSON(http.StatusOK, gin.H{"message": "恢复成功，服务正在重新加载，请稍候用备份中的管理员密码重新登录。"})
+		})
+
 		// POST /ovpn/feedback —— Bug 反馈（收集日志 + 转发 panda 主页 /api/openvpn/feedback）
 		ovpn.POST("/feedback", func(c *gin.Context) {
 			title := c.PostForm("title")
@@ -1378,20 +1515,11 @@ func main() {
 			case "restartSrv":
 				// 完整重启语义：① config.json → server.conf 增量同步（保留手动编辑行）；
 				// ② ensure_nat 重建 NAT/IP 转发（内存态，重启即失）；③ SIGHUP 让 openvpn 加载新配置。
-				upadteOvpnConfig()
-				if out, err := privExec(ovpnHelper, "ensure_nat").CombinedOutput(); err != nil {
-					if len(out) == 0 {
-						out = []byte(err.Error())
-					}
-					logger.Error(context.Background(), "ensure_nat: "+string(out))
-				}
-				_, err := ov.sendCommand("signal SIGHUP")
-				if err != nil {
+				if err := reloadServices(&ov); err != nil {
 					logger.Error(context.Background(), err.Error())
 					c.JSON(http.StatusInternalServerError, gin.H{"message": "重启服务失败"})
 					return
 				}
-
 				c.JSON(http.StatusOK, gin.H{"message": "重启服务成功"})
 			case "getConfig":
 				data, err := os.ReadFile(filepath.Join(ovData, "server.conf"))
